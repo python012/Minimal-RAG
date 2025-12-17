@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+ENV/
+Pipfile.lock
+
+
+
+# Vector database (ChromaDB persistent data)
+vector_db/
+
+# Streamlit
+.streamlit/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.history/
+.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data files (optional; keep structure, ignore large dumps)
+# data-set/images/
+# data-set/recipes/*.json.backup
+
+# Node (if any UI tooling present)
+node_modules/
+
+# Build outputs
+build/
+dist/
+
+# Logs & temp
+*.log
+logs/
+.tmp/
+*.tmp
+*~
+test-scripts/
