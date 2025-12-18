@@ -1,5 +1,5 @@
 ﻿"""
-RAG 引擎 - 检索增强生成的核心逻辑（Azure OpenAI 版本）
+RAG 引擎 - 检索增强生成的核心逻辑（阿里云 Qwen 版本）
 
 什么是 RAG？
 - RAG = 检索增强生成（Retrieval-Augmented Generation）
@@ -19,19 +19,22 @@ import re
 import chromadb
 from chromadb.config import Settings
 from dotenv import load_dotenv
-from openai import AzureOpenAI
+from openai import OpenAI
 
 # 首先加载 .env 以确保环境变量在模块初始化时可用
 load_dotenv()
 
-# Azure OpenAI API 配置
-AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY", "")
-AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", "")
-AZURE_DEPLOYMENT_NAME_CHAT = os.getenv("AZURE_DEPLOYMENT_NAME_CHAT", "gpt-4-mini")
-AZURE_DEPLOYMENT_NAME_EMBED = os.getenv("AZURE_DEPLOYMENT_NAME_EMBED", "text-embedding-3-small")
-AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
+# 阿里云 API 配置
+ALIYUN_MODEL_API_KEY = os.getenv("ALIYUN_MODEL_API_KEY", "")
+ALIYUN_BASE_URL = os.getenv(
+    "ALIYUN_BASE_URL",
+    "https://dashscope.aliyuncs.com/compatible-mode/v1"
+)
+ALIYUN_CHAT_MODEL = os.getenv("ALIYUN_CHAT_MODEL", "qwen-plus")
+ALIYUN_EMBED_MODEL = os.getenv("ALIYUN_EMBED_MODEL", "text-embedding-v4")
+ALIYUN_EMBED_DIM = int(os.getenv("ALIYUN_EMBED_DIM", "1024"))
 # API 超时时间（秒），默认 3 分钟
-AZURE_API_TIMEOUT = float(os.getenv("AZURE_API_TIMEOUT", "180"))
+ALIYUN_API_TIMEOUT = float(os.getenv("ALIYUN_API_TIMEOUT", "180"))
 
 
 class RAGEngine:
@@ -74,18 +77,18 @@ class RAGEngine:
         # 获取或创建 knowledge_base 集合
         # 若数据库不存在，将自动创建一个空集合
         self.collection = self.chroma_client.get_or_create_collection(
-            name="knowledge_base", metadata={"description": "RAG Knowledge Base"}
+            name="knowledge_base", metadata={"description": "RAG 知识库"}
         )
 
         # 打印初始化信息
         print("✓ RAG 引擎已初始化")
-        print(f"  - 生成模型：{AZURE_DEPLOYMENT_NAME_CHAT}（Azure OpenAI）")
-        print(f"  - 嵌入模型：{AZURE_DEPLOYMENT_NAME_EMBED}（Azure OpenAI）")
+        print(f"  - 生成模型：{ALIYUN_CHAT_MODEL}（阿里云通义千问）")
+        print(f"  - 嵌入模型：{ALIYUN_EMBED_MODEL}（阿里云通义千问）")
         print(f"  - 数据库路径：{db_path}")
 
     def get_embedding(self, text: str) -> List[float]:
         """
-        使用 Azure OpenAI API 生成文本的向量表示（embedding）。
+        使用阿里云 Qwen API 生成文本的向量表示（embedding）。
 
         参数：
             text: 要生成向量的文本
@@ -93,22 +96,23 @@ class RAGEngine:
         返回：
             向量列表（浮点数列表）
         """
-        if not AZURE_OPENAI_API_KEY:
-            raise ValueError("❌ 未配置 Azure API 密钥，请在 .env 文件中设置 AZURE_OPENAI_API_KEY")
+        if not ALIYUN_MODEL_API_KEY:
+            raise ValueError("❌ 未配置阿里云 API 密钥，请在 .env 文件中设置 ALIYUN_MODEL_API_KEY")
 
         try:
-            client = AzureOpenAI(
-                api_key=AZURE_OPENAI_API_KEY,
-                api_version=AZURE_OPENAI_API_VERSION,
-                azure_endpoint=AZURE_OPENAI_ENDPOINT,
+            client = OpenAI(
+                api_key=ALIYUN_MODEL_API_KEY,
+                base_url=ALIYUN_BASE_URL,
             )
             response = client.embeddings.create(
-                model=AZURE_DEPLOYMENT_NAME_EMBED,
+                model=ALIYUN_EMBED_MODEL,
                 input=text,
+                dimensions=ALIYUN_EMBED_DIM,
+                encoding_format="float"
             )
             return response.data[0].embedding
         except Exception as e:
-            print(f"❌ Azure 嵌入 API 失败：{e}")
+            print(f"❌ 阿里云嵌入 API 失败：{e}")
             raise
 
 
@@ -286,7 +290,7 @@ class RAGEngine:
         stream: bool = False,
     ):
         """
-        使用 Azure OpenAI API 基于检索到的文档生成答案。
+        使用阿里云 Qwen API 基于检索到的文档生成答案。
 
         参数：
             query: 用户问题
@@ -297,8 +301,8 @@ class RAGEngine:
         返回：
             生成的答案字符串，或流式生成器
         """
-        if not AZURE_OPENAI_API_KEY:
-            raise ValueError("❌ 未配置 Azure API 密钥，请在 .env 文件中设置 AZURE_OPENAI_API_KEY")
+        if not ALIYUN_MODEL_API_KEY:
+            raise ValueError("❌ 未配置阿里云 API 密钥，请在 .env 文件中设置 ALIYUN_MODEL_API_KEY")
 
         # 1. 检查是否有上下文文档
         has_context = context_docs and any(doc.strip() for doc in context_docs)
@@ -318,16 +322,15 @@ class RAGEngine:
         else:
             user_content = f"请使用你自己的知识回答以下问题：\n\n问题：{query}"
 
-        # 3. 调用 Azure OpenAI API
+        # 3. 调用阿里云 Qwen API
         try:
-            client = AzureOpenAI(
-                api_key=AZURE_OPENAI_API_KEY,
-                api_version=AZURE_OPENAI_API_VERSION,
-                azure_endpoint=AZURE_OPENAI_ENDPOINT,
+            client = OpenAI(
+                api_key=ALIYUN_MODEL_API_KEY,
+                base_url=ALIYUN_BASE_URL,
             )
             if not stream:
                 completion = client.chat.completions.create(
-                    model=AZURE_DEPLOYMENT_NAME_CHAT,
+                    model=ALIYUN_CHAT_MODEL,
                     messages=[
                         {"role": "system", "content": "你是一个有帮助的AI助手。"},
                         {"role": "user", "content": user_content},
@@ -337,7 +340,7 @@ class RAGEngine:
             else:
                 # 流式模式
                 stream_resp = client.chat.completions.create(
-                    model=AZURE_DEPLOYMENT_NAME_CHAT,
+                    model=ALIYUN_CHAT_MODEL,
                     messages=[
                         {"role": "system", "content": "你是一个有帮助的AI助手。"},
                         {"role": "user", "content": user_content},
@@ -345,14 +348,14 @@ class RAGEngine:
                     stream=True,
                 )
 
-                def azure_stream_generator():
+                def qwen_stream_generator():
                     for chunk in stream_resp:
                         if chunk.choices and chunk.choices[0].delta.content:
                             yield chunk.choices[0].delta.content
 
-                return azure_stream_generator()
+                return qwen_stream_generator()
         except Exception as e:
-            print(f"❌ Azure 对话 API 失败：{e}")
+            print(f"❌ 阿里云对话 API 失败：{e}")
             raise
 
     def query(
@@ -445,21 +448,20 @@ class RAGEngine:
             if is_irrelevant:
                 # 情况 A：未找到相关文档
                 # 让模型使用自己的原生知识回答
-                if not AZURE_OPENAI_API_KEY:
+                if not ALIYUN_MODEL_API_KEY:
                     return {
-                        "answer": "❌ 未配置 Azure API 密钥，无法回答问题",
+                        "answer": "❌ 未配置阿里云 API 密钥，无法回答问题",
                         "sources": [],
                         "raw_results": search_results,
                     }
 
                 try:
-                    client = AzureOpenAI(
-                        api_key=AZURE_OPENAI_API_KEY,
-                        api_version=AZURE_OPENAI_API_VERSION,
-                        azure_endpoint=AZURE_OPENAI_ENDPOINT,
+                    client = OpenAI(
+                        api_key=ALIYUN_MODEL_API_KEY,
+                        base_url=ALIYUN_BASE_URL,
                     )
                     completion = client.chat.completions.create(
-                        model=AZURE_DEPLOYMENT_NAME_CHAT,
+                        model=ALIYUN_CHAT_MODEL,
                         messages=[
                             {"role": "system", "content": "你是一个有帮助的AI助手。"},
                             {

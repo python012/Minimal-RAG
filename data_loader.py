@@ -1,7 +1,7 @@
 """
 数据加载器 - 将文档加载到向量数据库
 支持文本分块、批量导入、统计查询等功能
-使用 Azure OpenAI API 生成向量嵌入和对话
+使用阿里云 Qwen 模型生成向量嵌入
 """
 
 import os
@@ -13,65 +13,67 @@ from typing import List, Dict, Optional
 import chromadb
 from chromadb.config import Settings
 from dotenv import load_dotenv
-from openai import AzureOpenAI
+from openai import OpenAI
 
 # 首先加载 .env 以确保环境变量可用
 load_dotenv()
 
-# Azure OpenAI API 配置
-AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY", "")
-AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", "")
-AZURE_DEPLOYMENT_NAME_CHAT = os.getenv("AZURE_DEPLOYMENT_NAME_CHAT", "gpt-4-mini")
-AZURE_DEPLOYMENT_NAME_EMBED = os.getenv("AZURE_DEPLOYMENT_NAME_EMBED", "text-embedding-3-small")
-AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
+# 阿里云 API 配置
+ALIYUN_MODEL_API_KEY = os.getenv("ALIYUN_MODEL_API_KEY", "")
+ALIYUN_BASE_URL = os.getenv(
+    "ALIYUN_BASE_URL",
+    "https://dashscope.aliyuncs.com/compatible-mode/v1"
+)
+ALIYUN_EMBED_MODEL = os.getenv("ALIYUN_EMBED_MODEL", "text-embedding-v4")
+ALIYUN_EMBED_DIM = int(os.getenv("ALIYUN_EMBED_DIM", "1024"))
 # API 超时时间（秒），默认 3 分钟
-AZURE_API_TIMEOUT = float(os.getenv("AZURE_API_TIMEOUT", "180"))
+ALIYUN_API_TIMEOUT = float(os.getenv("ALIYUN_API_TIMEOUT", "180"))
 
 
 class DataLoader:
     """
-    Data Loader Class
+    数据加载器类
 
-    Features:
-    1. Read content from text files
-    2. Split long text into small chunks
-    3. Generate vector representation (embedding) for each text chunk
-    4. Store vectors and text to ChromaDB vector database
+    功能：
+    1. 从文本文件读取内容
+    2. 将长文本分割成小块
+    3. 为每个文本块生成向量表示（embedding）
+    4. 将向量和文本存储到 ChromaDB 向量数据库
 
-    Use cases:
-    - Import technical documentation, product manuals, FAQs
-    - Build enterprise knowledge base
-    - Prepare data source for RAG Q&A system
+    使用场景：
+    - 导入技术文档、产品手册、常见问题
+    - 构建企业知识库
+    - 为 RAG 问答系统准备数据源
     """
 
     def __init__(self, db_path: str = "./vector_db"):
         """
-        Initialize data loader
+        初始化数据加载器
 
-        Args:
-            db_path: Vector database storage path, default is ./vector_db
+        参数：
+            db_path: 向量数据库存储路径，默认为 ./vector_db
         """
-        # Initialize ChromaDB client (persistent storage)
-        # ChromaDB is a lightweight vector database specifically for storing and retrieving embeddings
+        # 初始化 ChromaDB 客户端（持久化存储）
+        # ChromaDB 是一个专门用于存储和检索嵌入向量的轻量级向量数据库
         self.chroma_client = chromadb.PersistentClient(
-            path=db_path, settings=Settings(anonymized_telemetry=False)  # Disable anonymous telemetry
+            path=db_path, settings=Settings(anonymized_telemetry=False)  # 禁用匿名遥测
         )
 
-        # Get or create collection named "knowledge_base"
-        # Collection is similar to "table" in traditional databases
+        # 获取或创建名为 "knowledge_base" 的集合
+        # 集合类似于传统数据库中的"表"
         self.collection = self.chroma_client.get_or_create_collection(
-            name="knowledge_base", metadata={"description": "RAG Knowledge Base"}
+            name="knowledge_base", metadata={"description": "RAG 知识库"}
         )
 
         print("✓ 数据加载器已初始化")
-        print(f"  - 嵌入模型：{AZURE_DEPLOYMENT_NAME_EMBED}（Azure OpenAI）")
-        print(f"  - 生成模型：{AZURE_DEPLOYMENT_NAME_CHAT}（Azure OpenAI）")
-        print(f"  - API 端点：{AZURE_OPENAI_ENDPOINT}")
+        print(f"  - 嵌入模型：{ALIYUN_EMBED_MODEL}（阿里云通义千问）")
+        print(f"  - 向量维度：{ALIYUN_EMBED_DIM}")
+        print(f"  - API 端点：{ALIYUN_BASE_URL}")
         print(f"  - 数据库路径：{db_path}")
 
     def get_embedding(self, text: str) -> List[float]:
         """
-        使用 Azure OpenAI API 生成文本的向量表示（embedding）。
+        使用阿里云 Qwen API 生成文本的向量表示（embedding）。
 
         参数：
             text: 要生成向量的文本
@@ -79,166 +81,167 @@ class DataLoader:
         返回：
             向量列表（浮点数列表）
         """
-        if not AZURE_OPENAI_API_KEY or not AZURE_OPENAI_ENDPOINT:
-            raise ValueError("❌ 未配置 Azure OpenAI 密钥或端点，请在 .env 文件中设置 AZURE_OPENAI_API_KEY 和 AZURE_OPENAI_ENDPOINT")
+        if not ALIYUN_MODEL_API_KEY:
+            raise ValueError("❌ 未配置阿里云 API 密钥，请在 .env 文件中设置 ALIYUN_MODEL_API_KEY")
 
         try:
-            client = AzureOpenAI(
-                api_key=AZURE_OPENAI_API_KEY,
-                api_version=AZURE_OPENAI_API_VERSION,
-                azure_endpoint=AZURE_OPENAI_ENDPOINT,
+            client = OpenAI(
+                api_key=ALIYUN_MODEL_API_KEY,
+                base_url=ALIYUN_BASE_URL,
             )
             response = client.embeddings.create(
-                model=AZURE_DEPLOYMENT_NAME_EMBED,
+                model=ALIYUN_EMBED_MODEL,
                 input=text,
+                dimensions=ALIYUN_EMBED_DIM,
+                encoding_format="float"
             )
             return response.data[0].embedding
         except Exception as e:
-            print(f"❌ Azure OpenAI 嵌入 API 失败：{e}")
+            print(f"❌ 阿里云嵌入 API 失败：{e}")
             raise
 
     def split_text(self, text: str, chunk_size: int = 1000, overlap: int = 200) -> List[str]:
         """
-        Split long text into small chunks with certain overlap
+        将长文本分割成带有一定重叠的小块
 
-        Why split text?
-        1. Vector databases have size limits for each text chunk
-        2. Small chunks have more focused semantics for more accurate retrieval
-        3. Avoid irrelevant content interfering with retrieval results
+        为什么要分割文本？
+        1. 向量数据库对每个文本块有大小限制
+        2. 小块语义更集中，检索更准确
+        3. 避免无关内容干扰检索结果
 
-        What is overlap?
-        - Adjacent chunks have some overlapping content
-        - Example: chunk1="...ABC", chunk2="BC...", BC is the overlap
-        - Overlap prevents key information from being split between two chunks
+        什么是重叠？
+        - 相邻的块之间有一些重叠的内容
+        - 例如：chunk1="...ABC"，chunk2="BC..."，BC 就是重叠部分
+        - 重叠可以防止关键信息被切分到两个块之间
 
-        Splitting strategy:
-        1. Split at period (.) first to keep sentences intact
-        2. Then split at newline (\n)
-        3. Avoid split points too early (> chunk_size // 2)
+        分割策略：
+        1. 优先在句号（.）处分割，保持句子完整
+        2. 其次在换行符（\n）处分割
+        3. 避免分割点过早（> chunk_size // 2）
 
-        Args:
-            text: Long text to split
-            chunk_size: Size of each chunk (character count), default 1000
-            overlap: Overlap size between adjacent chunks (character count), default 200
+        参数：
+            text: 要分割的长文本
+            chunk_size: 每个块的大小（字符数），默认 1000
+            overlap: 相邻块之间的重叠大小（字符数），默认 200
 
-        Returns:
-            List of text chunks, e.g. ["First part...", "Second part...", ...]
+        返回：
+            文本块列表，例如 ["第一部分...", "第二部分...", ...]
         """
         chunks = []
         start = 0
         text_len = len(text)
 
         while start < text_len:
-            # Calculate end position of current chunk
+            # 计算当前块的结束位置
             end = start + chunk_size
             chunk = text[start:end]
 
-            # If not at end of text, try to split at sentence boundary
+            # 如果不是文本末尾，尝试在句子边界处分割
             if end < text_len:
-                # Find position of last period
+                # 查找最后一个句号的位置
                 last_period = chunk.rfind(".")
-                # Find position of last newline
+                # 查找最后一个换行符的位置
                 last_newline = chunk.rfind("\n")
-                # Choose the later position as split point
+                # 选择较后的位置作为分割点
                 break_point = max(last_period, last_newline)
 
-                # Only use split point if not too early (avoid chunk too small)
+                # 只有在分割点不是太早的情况下才使用（避免块太小）
                 if break_point > chunk_size // 2:
                     chunk = chunk[: break_point + 1]
                     end = start + break_point + 1
 
-            # Strip whitespace and add to result list
+            # 去除首尾空白并添加到结果列表
             chunks.append(chunk.strip())
 
-            # Next chunk start position = current end position - overlap size
-            # This creates overlap of 'overlap' characters between adjacent chunks
+            # 下一个块的开始位置 = 当前结束位置 - 重叠大小
+            # 这样就创建了相邻块之间 'overlap' 个字符的重叠
             start = end - overlap
 
         return chunks
 
     def load_text_file(self, file_path: str, source_type: str = "file") -> int:
         """
-        Load single text file into vector database
+        将单个文本文件加载到向量数据库
 
-        Complete workflow:
-        1. Read file content
-        2. Split into multiple chunks
-        3. Generate embedding for each chunk
-        4. Store to ChromaDB along with metadata (filename, chunk number, etc.)
+        完整工作流程：
+        1. 读取文件内容
+        2. 分割成多个块
+        3. 为每个块生成嵌入向量
+        4. 存储到 ChromaDB，并带上元数据（文件名、块编号等）
 
-        Args:
-            file_path: File path, e.g. "./data/sample.txt"
-            source_type: Data source type tag, e.g. "file", "git", "jira"
-                        Used for filtering retrieval later (e.g. search only Git documents)
+        参数：
+            file_path: 文件路径，例如 "./data/sample.txt"
+            source_type: 数据源类型标签，例如 "file"、"git"、"jira"
+                        用于后续过滤检索（例如只搜索 Git 文档）
 
-        Returns:
-            Number of successfully loaded chunks
+        返回：
+            成功加载的块数量
         """
         try:
-            # 1. Read file content (using UTF-8 encoding)
+            # 1. 读取文件内容（使用 UTF-8 编码）
             with open(file_path, "r", encoding="utf-8") as f:
                 content = f.read()
 
-            # 2. Split content into chunks
+            # 2. 将内容分割成块
             chunks = self.split_text(content)
 
-            print(f"📄 Processing file: {file_path}")
-            print(f"   - File size: {len(content)} characters")
-            print(f"   - Split result: {len(chunks)} chunks")
+            print(f"📄 处理文件：{file_path}")
+            print(f"   - 文件大小：{len(content)} 字符")
+            print(f"   - 分割结果：{len(chunks)} 块")
 
-            # 3. Generate embedding for each chunk  and store
+            # 3. 为每个块生成嵌入向量并存储
             for i, chunk in enumerate(chunks):
-                # Skip empty chunks
+                # 跳过空块
                 if not chunk.strip():
                     continue
 
-                # Generate embedding (call Ollama API)
-                print(f"   - Processing chunk {i+1}/{len(chunks)}...", end="\r")
+                # 生成嵌入向量（调用阿里云 API）
+                print(f"   - 处理块 {i+1}/{len(chunks)}...", end="\r")
                 embedding = self.get_embedding(chunk)
 
-                # Store to ChromaDB
-                # embeddings: vector list
-                # documents: original text list
-                # metadatas: metadata list (filename, source, chunk number, etc.)
-                # ids: unique identifier list (composed of file path + number)
+                # 存储到 ChromaDB
+                # embeddings: 向量列表
+                # documents: 原始文本列表
+                # metadatas: 元数据列表（文件名、来源、块编号等）
+                # ids: 唯一标识符列表（由文件路径 + 编号组成）
                 self.collection.add(
                     embeddings=[embedding],
                     documents=[chunk],
                     metadatas=[
                         {
-                            "source": source_type,  # Data source type
-                            "file_path": file_path,  # Full file path
-                            "file_name": os.path.basename(file_path),  # Filename
-                            "chunk_id": i,  # Chunk number (starts from 0)
-                            "total_chunks": len(chunks),  # Total chunks in this file
-                            "chunk_size": len(chunk),  # Current chunk size
+                            "source": source_type,  # 数据源类型
+                            "file_path": file_path,  # 完整文件路径
+                            "file_name": os.path.basename(file_path),  # 文件名
+                            "chunk_id": i,  # 块编号（从 0 开始）
+                            "total_chunks": len(chunks),  # 此文件的总块数
+                            "chunk_size": len(chunk),  # 当前块的大小
                         }
                     ],
-                    ids=[f"{file_path}_{i}"],  # Unique ID, e.g. "./data/doc.txt_0"
+                    ids=[f"{file_path}_{i}"],  # 唯一 ID，例如 "./data/doc.txt_0"
                 )
 
-            print(f"   ✓ Complete: {len(chunks)} chunks imported")
+            print(f"   ✓ 完成：{len(chunks)} 块已导入")
             return len(chunks)
 
         except OSError as e:
-            print(f"❌ File read error {file_path}: {e}")
+            print(f"❌ 文件读取错误 {file_path}：{e}")
             return 0
         except UnicodeDecodeError as e:
-            print(f"❌ File encoding error {file_path}: {e}")
-            print("   Tip: Please ensure file is UTF-8 encoded")
+            print(f"❌ 文件编码错误 {file_path}：{e}")
+            print("   提示：请确保文件使用 UTF-8 编码")
             return 0
         except Exception as e:
-            print(f"❌ File processing failed {file_path}: {e}")
+            print(f"❌ 文件处理失败 {file_path}：{e}")
             return 0
 
     def _match_image_for_recipe(
         self, recipe_basename: str, preferred_filename: Optional[str] = None
     ) -> Optional[str]:
         """
-        Match image with same name as recipe file (without extension) in `data/images/`.
+        在 `data/images/` 中匹配与食谱文件同名（不含扩展名）的图片。
 
-        Supports common extensions: .jpg / .jpeg / .png
-        Returns matched relative path (e.g. data/images/xxx.jpg), or None if not matched.
+        支持常见扩展名：.jpg / .jpeg / .png
+        返回匹配的相对路径（例如 data/images/xxx.jpg），或者 None（未匹配）。
         """
         # 支持多个图片目录和显式文件名
         image_dirs = [
@@ -246,13 +249,13 @@ class DataLoader:
             os.path.join("data2", "images"),
         ]
 
-        # If JSON provides explicit filename, try matching with that first
+        # 如果 JSON 提供了显式文件名，首先尝试匹配它
         filenames: List[str] = []
         if preferred_filename and preferred_filename.strip():
             base = preferred_filename.strip()
             filenames.append(base)
 
-        # Then try matching by same name rule
+        # 然后尝试按同名规则匹配
         for ext in [".jpg", ".jpeg", ".png"]:
             filenames.append(recipe_basename + ext)
 
@@ -387,47 +390,47 @@ class DataLoader:
         recursive: bool = True,
     ) -> int:
         """
-        Batch load all files in directory
+        批量加载目录中的所有文件
 
-        Supported features:
-        1. Filter by file extension (e.g. load only .txt and .md)
-        2. Recursively search subdirectories
-        3. Batch process multiple files
+        支持的功能：
+        1. 按文件扩展名过滤（例如只加载 .txt 和 .md）
+        2. 递归搜索子目录
+        3. 批量处理多个文件
 
-        Args:
-            dir_path: Directory path, e.g. "./data"
-            patterns: File matching pattern list, e.g. ["*.txt", "*.md"]
-                     None Defaults to ["*.txt", "*.md"]
-            source_type: Data source type tag
-            recursive: Whether to recursively search subdirectories, default True
+        参数：
+            dir_path: 目录路径，例如 "./data"
+            patterns: 文件匹配模式列表，例如 ["*.txt", "*.md"]
+                     None 时默认为 ["*.txt", "*.md"]
+            source_type: 数据源类型标签
+            recursive: 是否递归搜索子目录，默认 True
 
-        Returns:
-            Successfully loadedTotal chunk count
+        返回：
+            成功加载的总块数
         """
-        # Use default patterns if not specified
+        # 如果未指定模式，使用默认模式
         if patterns is None:
-            # Default support for txt / md / json
+            # 默认支持 txt / md / json
             patterns = ["*.txt", "*.md", "*.json"]
 
         total_chunks = 0
 
-        # Iterate through each matching pattern
+        # 遍历每个匹配模式
         for pattern in patterns:
-            # Build search path
-            # Recursive: "./data/**/*.txt" (search all subdirectories)
-            # Non-recursive: "./data/*.txt" (search current directory only)
+            # 构建搜索路径
+            # 递归："./data/**/*.txt"（搜索所有子目录）
+            # 非递归："./data/*.txt"（只搜索当前目录）
             if recursive:
                 search_pattern = f"{dir_path}/**/{pattern}"
             else:
                 search_pattern = f"{dir_path}/{pattern}"
 
-            # Use glob to find all matching files
+            # 使用 glob 查找所有匹配的文件
             files = glob.glob(search_pattern, recursive=recursive)
 
-            print(f"\n🔍 Search pattern: {pattern}")
-            print(f"   Found {len(files)} files")
+            print(f"\n🔍 搜索模式：{pattern}")
+            print(f"   找到 {len(files)} 个文件")
 
-            # Process files one by one: distinguish processing method by extension
+            # 逐个处理文件：根据扩展名区分处理方法
             for file_path in files:
                 ext = os.path.splitext(file_path)[1].lower()
                 if ext == ".json":
@@ -441,34 +444,34 @@ class DataLoader:
 
     def clear_database(self):
         """
-        Clear all data in database
+        清空数据库中的所有数据
 
-        Operation workflow:
-        1. Delete existing "knowledge_base" collection
-        2. Recreate an empty "knowledge_base" collection
-        3. Insert a dummy record to ensure collection is properly initialized
+        操作流程：
+        1. 删除现有的 "knowledge_base" 集合
+        2. 重新创建一个空的 "knowledge_base" 集合
+        3. 插入一条占位记录以确保集合正确初始化
 
-        Use cases:
-        - Clear old data before reimporting
-        - Switch to different knowledge base content
-        - Testing and debugging
+        使用场景：
+        - 重新导入前清空旧数据
+        - 切换到不同的知识库内容
+        - 测试和调试
 
-        Note:
-        ⚠️ This operation is irreversible, all imported data will be lost!
+        注意：
+        ⚠️ 此操作不可逆，所有已导入的数据将会丢失！
         """
         try:
-            print("🗑️  Clearing database...")
+            print("🗑️  正在清空数据库...")
 
-            # Delete collection
+            # 删除集合
             self.chroma_client.delete_collection("knowledge_base")
 
-            # Recreate collection
+            # 重新创建集合
             self.collection = self.chroma_client.create_collection(
-                name="knowledge_base", metadata={"description": "RAG Knowledge Base"}
+                name="knowledge_base", metadata={"description": "RAG 知识库"}
             )
 
-            # Insert a dummy record to ensure collection is properly initialized
-            dummy_text = "This is a placeholder record to initialize the collection."
+            # 插入一条占位记录以确保集合正确初始化
+            dummy_text = "这是一条用于初始化集合的占位记录。"
             dummy_embedding = self.get_embedding(dummy_text)
             self.collection.add(
                 embeddings=[dummy_embedding],
@@ -478,7 +481,7 @@ class DataLoader:
                         "source": "system",
                         "file_path": "__dummy__",
                         "file_name": "__dummy__",
-                        "name": "Placeholder",
+                        "name": "占位符",
                         "tags": "system",
                         "glass": "",
                         "garnish": "",
@@ -489,20 +492,20 @@ class DataLoader:
                 ids=["__dummy_init__"],
             )
 
-            print("✓ Database cleared (with dummy record inserted)")
+            print("✓ 数据库已清空（已插入占位记录）")
 
         except Exception as e:
-            print(f"❌ Failed to clear database: {e}")
+            print(f"❌ 清空数据库失败：{e}")
 
     def get_stats(self) -> Dict:
         """
-        Get database statistics
+        获取数据库统计信息
 
-        Returns:
-            Dictionary containing statistics:
+        返回：
+            包含统计信息的字典：
             {
-                'total_chunks': 100,           # Total chunk count
-                'collection_name': 'knowledge_base'  # collectionName
+                'total_chunks': 100,           # 总块数
+                'collection_name': 'knowledge_base'  # 集合名称
             }
         """
         count = self.collection.count()
@@ -511,114 +514,114 @@ class DataLoader:
 
 def main():
     """
-    Command Line Interface (CLI)
+    命令行接口 (CLI)
 
-    Supported commands:
-    1. Import single file:
+    支持的命令：
+    1. 导入单个文件：
        python data_loader.py --input ./data/doc.txt
 
-    2. Import entire directory:
+    2. 导入整个目录：
        python data_loader.py --input ./data/
 
-    3. Specify file types:
+    3. 指定文件类型：
        python data_loader.py --input ./data/ --pattern *.txt *.md
 
-    4. Clear database before import:
+    4. 导入前清空数据库：
        python data_loader.py --input ./data/ --clear
 
-    5. View statistics:
+    5. 查看统计信息：
        python data_loader.py --stats
     """
-    # Create command line argument parser
-    parser = argparse.ArgumentParser(description="Load documents into vector database (supports Ollama local models)")
+    # 创建命令行参数解析器
+    parser = argparse.ArgumentParser(description="将文档加载到向量数据库（支持阿里云 Qwen 模型）")
 
-    # Required argument: input file or directory
-    parser.add_argument("--input", "-i", help="Input file or directory path")
+    # 必需参数：输入文件或目录
+    parser.add_argument("--input", "-i", help="输入文件或目录路径")
 
-    # Optional argument: Data source type tag
-    parser.add_argument("--source", "-s", default="file", help="Data source type (file, git, jira,, etc.)")
+    # 可选参数：数据源类型标签
+    parser.add_argument("--source", "-s", default="file", help="数据源类型（file、git、jira 等）")
 
-    # Optional argument: file matching pattern
+    # 可选参数：文件匹配模式
     parser.add_argument(
         "--pattern",
         "-p",
         nargs="+",
         default=["*.txt", "*.md"],
-        help="File matching pattern, e.g.: *.txt *.md",
+        help="文件匹配模式，例如：*.txt *.md",
     )
 
-    # Optional argument: whether to clear database
-    parser.add_argument("--clear", action="store_true", help="Clear database before import")
+    # 可选参数：是否清空数据库
+    parser.add_argument("--clear", action="store_true", help="导入前清空数据库")
 
-    # Optional argument: display statistics
-    parser.add_argument("--stats", action="store_true", help="Display database statistics")
+    # 可选参数：显示统计信息
+    parser.add_argument("--stats", action="store_true", help="显示数据库统计信息")
 
     args = parser.parse_args()
 
-    # Load environment variables (from .env file)
+    # 加载环境变量（从 .env 文件）
     load_dotenv()
 
-    # Read from environment variablesDatabase path
+    # 从环境变量读取数据库路径
     db_path = os.getenv("CHROMA_DB_PATH", "./vector_db")
 
-    # Initialize data loader
+    # 初始化数据加载器
     print("=" * 60)
-    print("📦 Ollama RAG Data Loader")
+    print("📦 阿里云 Qwen RAG 数据加载器")
     print("=" * 60)
 
     loader = DataLoader(db_path=db_path)
 
-    # Clear database if --clear specified
+    # 如果指定了 --clear，清空数据库
     if args.clear:
         loader.clear_database()
-        # If only clearing without input, exit successfully
+        # 如果只是清空而没有输入，成功退出
         if not args.input and not args.stats:
             sys.exit(0)
 
-    # Display statistics and exit if --stats specified
+    # 如果指定了 --stats，显示统计信息并退出
     if args.stats:
         stats = loader.get_stats()
-        print("\n📊 Database Statistics:")
-        print(f"  - Total chunk count: {stats['total_chunks']}")
-        print(f"  - collectionName: {stats['collection_name']}")
+        print("\n📊 数据库统计信息：")
+        print(f"  - 总块数：{stats['total_chunks']}")
+        print(f"  - 集合名称：{stats['collection_name']}")
         sys.exit(0)
 
-    # Must specify --input or --stats (unless already handled by --clear)
+    # 必须指定 --input 或 --stats（除非已经由 --clear 处理）
     if not args.input:
-        print("❌ Error: Please use --input to specify input file/directory, or use --stats to view statistics")
-        print("\nUsage examples:")
+        print("❌ 错误：请使用 --input 指定输入文件/目录，或使用 --stats 查看统计信息")
+        print("\n使用示例：")
         print("  python data_loader.py --input ./data/doc.txt")
         print("  python data_loader.py --input ./data/ --pattern *.txt")
         print("  python data_loader.py --stats")
         print("  python data_loader.py --clear")
         sys.exit(1)
 
-    # Start loading data
+    # 开始加载数据
     input_path = args.input
 
     if os.path.isfile(input_path):
-        # Input is a single file
-        print(f"\n📄 Loading single file: {input_path}")
+        # 输入是单个文件
+        print(f"\n📄 加载单个文件：{input_path}")
         chunks = loader.load_text_file(input_path, args.source)
-        print(f"\n✅ Successfully loaded {chunks} chunks")
+        print(f"\n✅ 成功加载 {chunks} 块")
 
     elif os.path.isdir(input_path):
-        # Input is a directory
-        print(f"\n📁 Loading directory: {input_path}")
-        print(f"   Matching patterns: {args.pattern}")
+        # 输入是目录
+        print(f"\n📁 加载目录：{input_path}")
+        print(f"   匹配模式：{args.pattern}")
         chunks = loader.load_directory(input_path, args.pattern, args.source)
-        print(f"\n✅ Successfully loaded {chunks} chunks")
+        print(f"\n✅ 成功加载 {chunks} 块")
 
     else:
-        print(f"❌ Error: {input_path} is not a valid file or directory")
+        print(f"❌ 错误：{input_path} 不是有效的文件或目录")
         sys.exit(1)
 
-    # Display final statistics
+    # 显示最终统计信息
     stats = loader.get_stats()
     print("\n" + "=" * 60)
-    print("📊 Final Statistics:")
-    print(f"  - Total chunks in database: {stats['total_chunks']}")
-    print(f"  - collectionName: {stats['collection_name']}")
+    print("📊 最终统计信息：")
+    print(f"  - 数据库中的总块数：{stats['total_chunks']}")
+    print(f"  - 集合名称：{stats['collection_name']}")
     print("=" * 60)
 
 
