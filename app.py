@@ -1,13 +1,13 @@
-"""Streamlit RAG Knowledge Assistant Frontend.
+"""Streamlit RAG 知识助手前端界面
 
-This file implements the chat interface and calls the backend `RAGEngine` to complete the following steps:
-1. Load environment variables to get model name and vector database path.
-2. Page initialization (title / icon / layout).
-3. Initialize and cache engine instance and session chat history.
-4. Sidebar: Engine reload, database statistics, retrieval parameters, clear history, usage tips.
-5. Main area: Render historical messages in order, source content can be collapsed for viewing.
-6. After user input, execute RAG: Generate embedding -> Similarity search -> Construct context -> Call model to generate answer.
-7. Bottom displays currently used Ollama model and ChromaDB information.
+此文件实现了聊天界面，并调用后端 `RAGEngine` 完成以下步骤：
+1. 加载环境变量，获取模型名称和向量数据库路径
+2. 页面初始化（标题/图标/布局）
+3. 初始化并缓存引擎实例和会话聊天历史
+4. 侧边栏：引擎重载、数据库统计、检索参数、清除历史、使用提示
+5. 主区域：按顺序渲染历史消息，来源内容可折叠查看
+6. 用户输入后，执行 RAG：生成嵌入 -> 相似度搜索 -> 构建上下文 -> 调用模型生成答案
+7. 底部显示当前使用的 Azure OpenAI 模型和 ChromaDB 信息
 
 """
 
@@ -16,19 +16,19 @@ import streamlit as st
 from dotenv import load_dotenv
 from rag_engine import RAGEngine
 
-# ====================== Environment Variable Loading ======================
-# Load .env early to ensure CHROMA_DB_PATH / OLLAMA_MODEL etc. are available.
+# ====================== 环境变量加载 ======================
+# 提前加载 .env 以确保 CHROMA_DB_PATH / 模型配置等可用
 
-# Load environment variables
+# 加载环境变量
 load_dotenv()
 
-# ====================== Page Configuration ======================
-# Set title, icon, and wide layout.
-st.set_page_config(page_title="RAG Knowledge Assistant", page_icon="🤖", layout="wide")
+# ====================== 页面配置 ======================
+# 设置标题、图标和宽屏布局
+st.set_page_config(page_title="RAG 知识助手", page_icon="🤖", layout="wide")
 
-# ====================== Session State Initialization ======================
+# ====================== 会话状态初始化 ======================
 # chat_history: [{role, content, sources?}]
-# rag_engine: Cached RAGEngine singleton
+# rag_engine: 缓存的 RAGEngine 单例
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 if "rag_engine" not in st.session_state:
@@ -37,135 +37,125 @@ if "rag_engine" not in st.session_state:
 
 @st.cache_resource
 def initialize_rag_engine():
-    """Construct and cache RAGEngine singleton.
+    """构建并缓存 RAGEngine 单例
 
-    Uses `@st.cache_resource` to avoid repeated initialization (time-consuming operations like
-    connecting to vector database), only rebuilds on first run or after manual cache clear.
-    Displays error message in UI when exceptions occur.
+    使用 `@st.cache_resource` 避免重复初始化（连接向量数据库等耗时操作），
+    仅在首次运行或手动清除缓存后重建。
+    发生异常时在 UI 中显示错误消息。
     """
     db_path = os.getenv("CHROMA_DB_PATH", "./vector_db")
     try:
         engine = RAGEngine(db_path=db_path)
         return engine
     except Exception as e:
-        st.error(f"Error initializing RAG engine: {e}")
+        st.error(f"初始化 RAG 引擎时出错：{e}")
         return None
 
 
-# ====================== Page Header ======================
-# Display Logo + title + brief description.
+# ====================== 页面标题 ======================
+# 显示 Logo + 标题 + 简要描述
 # st.image("static/robot.png", width=48)
-st.title("📚 RAG Knowledge Assistant")
-st.markdown("Ask questions and get answers based on your knowledge base")
+st.title("📚 RAG 知识助手")
+st.markdown("提出问题，基于您的知识库获取答案")
 
-# Sidebar
+# 侧边栏
 with st.sidebar:
-    st.header("⚙️ Settings")
+    st.header("⚙️ 设置")
 
-    # Engine reload: Clear cache and rerun, suitable for refreshing after adding new data.
-    if st.button("🔄 Reload Engine"):
+    # 引擎重载：清除缓存并重新运行，适合添加新数据后刷新
+    if st.button("🔄 重新加载引擎"):
         st.cache_resource.clear()
         st.session_state.rag_engine = None
         st.rerun()
 
-    # Lazy initialization: Execute on first run or after reload, with progress indicator.
+    # 延迟初始化：首次运行或重载后执行，带进度指示器
     if st.session_state.rag_engine is None:
-        with st.spinner("Initializing RAG engine..."):
+        with st.spinner("正在初始化 RAG 引擎..."):
             st.session_state.rag_engine = initialize_rag_engine()
 
-    # Engine health status and vector database statistics.
+    # 引擎健康状态和向量数据库统计
     if st.session_state.rag_engine:
-        st.success("✅ Engine loaded")
+        st.success("✅ 引擎已加载")
         stats = st.session_state.rag_engine.get_stats()
-        st.markdown(f"**Documents in DB:** :red[{stats['total_documents']}]")
+        st.markdown(f"**数据库中的文档数：** :red[{stats['total_documents']}]")
 
-        # Display model information
+        # 显示模型信息
         st.divider()
-        st.subheader("🤖 Model Configuration")
-        # Check if using Aliyun API
-        api_key = os.getenv("EMBEDDING_MODEL_API_KEY", "") or os.getenv("GENERATION_MODEL_API_KEY", "")
-        if api_key:
-            # Using Aliyun cloud models
-            gen_model = os.getenv("ALIYUN_CHAT_MODEL", "qwen-flash")
-            embed_model = os.getenv("ALIYUN_EMBED_MODEL", "text-embedding-v4")
-            model_provider = "Aliyun DashScope"
-        else:
-            # Fallback to local Ollama models
-            gen_model = os.getenv("OLLAMA_MODEL", "llama2:7b")
-            embed_model = os.getenv("OLLAMA_EMBED_MODEL", gen_model)
-            model_provider = "Local Ollama"
-        st.info(f"**Provider:** {model_provider}")
-        st.info(f"**Generation Model:**\n`{gen_model}`")
-        st.info(f"**Embedding Model:**\n`{embed_model}`")
+        st.subheader("🤖 模型配置")
+        gen_model = os.getenv("ALIYUN_CHAT_MODEL", "qwen-plus")
+        embed_model = os.getenv("ALIYUN_EMBED_MODEL", "text-embedding-v4")
+        st.info(f"**服务提供商：** 阿里云通义千问")
+        st.info(f"**生成模型：**\n`{gen_model}`")
+        st.info(f"**嵌入模型：**\n`{embed_model}`")
 
-        # Retrieval parameters: Control number of results and minimum relevance threshold.
+        # 检索参数：控制结果数量和最小相关度阈值
         st.divider()
-        st.subheader("🔍 Search Settings")
-        n_results = st.slider("Number of results", 1, 10, 5)
-        min_relevance = st.slider("Min relevance to use KB", 0.0, 1.0, 0.35, 0.05)
+        st.subheader("🔍 搜索设置")
+        n_results = st.slider("结果数量", 1, 10, 5)
+        min_relevance = st.slider("使用知识库的最小相关度", 0.0, 1.0, 0.35, 0.05)
 
-        # Source filter (placeholder, can be extended with actual data source tags later).
-        filter_source = st.selectbox("Filter by source", ["All", "file", "git", "jira", "confluence"])
-        if filter_source == "All":
+        # 来源过滤（占位符，后续可扩展实际数据源标签）
+        filter_source = st.selectbox("按来源过滤", ["全部", "file", "git", "jira", "confluence"])
+        if filter_source == "全部":
             filter_source = None
     else:
-        st.error("❌ Engine not loaded")
+        st.error("❌ 引擎未加载")
         st.stop()
 
     st.divider()
 
-    # Clear chat: Reset history without rebuilding engine.
-    if st.button("🗑️ Clear Chat History"):
+    # 清除对话：重置历史记录，不重建引擎
+    if st.button("🗑️ 清除对话历史"):
         st.session_state.chat_history = []
         st.rerun()
 
     st.divider()
 
-    # Usage instructions and operation tips.
+    # 使用说明和操作提示
     st.markdown(
         """
-    ### 📚 How to use:
-    1. Load documents via `data_loader.py`
-    2. Ask a focused question
-    3. Inspect sources for verification
+    ### 📚 使用方法：
+    1. 通过 `data_loader.py` 加载文档
+    2. 提出具体的问题
+    3. 检查来源以验证准确性
     
-    ### 💡 Tips:
-    - Be specific for better retrieval
-    - Use the source expander to audit relevance
-    - Reload engine after adding new data
+    ### 💡 提示：
+    - 问题越具体，检索效果越好
+    - 使用来源展开器审查相关性
+    - 添加新数据后需重新加载引擎
     """
     )
 
-# Main chat interface
+# 主聊天界面
 if st.session_state.rag_engine is None:
-    st.warning("⚠️ RAG Engine not loaded, please click Reload Engine in sidebar to retry.")
+    st.warning("⚠️ RAG 引擎未加载，请点击侧边栏中的重新加载引擎按钮重试。")
     st.stop()
 
-# ====================== Chat History Rendering ======================
-# Loop through and display messages; collapse sources to avoid cluttering main interface.
+# ====================== 聊天历史渲染 ======================
+# 循环遍历并显示消息；折叠来源以避免主界面杂乱
 for message in st.session_state.chat_history:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
         if "sources" in message and message["sources"]:
-            with st.expander("📚 View Sources"):
+            with st.expander("📚 查看来源"):
                 for i, source in enumerate(message["sources"], 1):
-                    st.markdown(f"**Source {i}** (Relevance: {source['relevance_score']:.2%})")
-                    # Text content
+                    st.markdown(f"**来源 {i}** (相关度：{source['relevance_score']:.2%})")
+                    # 文本内容
                     st.text(source["content"])
-                    # Display thumbnail if image path exists
+                    # 如果存在图片路径则显示缩略图
                     img_path = source.get("metadata", {}).get("image_path")
                     if img_path:
                         st.image(img_path, width=160)
                     if source.get("metadata"):
-                        st.caption(f"File: {source['metadata'].get('file_name', 'Unknown')}")
+                        st.caption(f"文件：{source['metadata'].get('file_name', '未知')}")
                     st.divider()
 
-# Chat input
-if prompt := st.chat_input("Ask a question about your knowledge base..."):
-    # ====================== User Input Processing ======================
-    # 1. Write user message
-    # 2. Render user bubble
-    # 3. Call RAG engine to retrieve and generate answer, attach sources
+# 聊天输入
+if prompt := st.chat_input("向您的知识库提问..."):
+    # ====================== 用户输入处理 ======================
+    # 1. 写入用户消息
+    # 2. 渲染用户气泡
+    # 3. 调用 RAG 引擎检索并生成答案，附加来源
     st.session_state.chat_history.append({"role": "user", "content": prompt})
 
     with st.chat_message("user"):
@@ -173,68 +163,64 @@ if prompt := st.chat_input("Ask a question about your knowledge base..."):
 
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
-        
+
         try:
-            # Use RAG engine query method (handles relevance check internally)
+            # 使用 RAG 引擎查询方法（内部处理相关度检查）
             print(f"\n{'='*60}")
-            print(f"🔍 Processing query: {prompt}")
-            print(f"   Min relevance threshold: {min_relevance}")
+            print(f"🔍 处理查询：{prompt}")
+            print(f"   最小相关度阈值：{min_relevance}")
             print(f"{'='*60}")
-            
-            # Get search results and check relevance
+
+            # 获取搜索结果并检查相关度
             search_results = st.session_state.rag_engine.search(
-                query=prompt,
-                n_results=n_results,
-                filter_source=filter_source
+                query=prompt, n_results=n_results, filter_source=filter_source
             )
-            
+
             documents = search_results["documents"][0] if search_results["documents"] else []
             metadatas = search_results["metadatas"][0] if search_results["metadatas"] else []
             distances = search_results["distances"][0] if search_results["distances"] else []
-            
-            # Check relevance
+
+            # 检查相关度
             max_relevance = 0.0
             if distances:
                 max_relevance = max(1 - d for d in distances)
-            
+
             is_irrelevant = (not documents) or (max_relevance < max(0.0, min_relevance))
-            
-            print(f"   Retrieved distances: {distances[:3] if distances else 'N/A'}")
-            print(f"   Max relevance score: {max_relevance:.6f}")
-            print(f"   Relevance above threshold: {max_relevance >= max(0.0, min_relevance)}")
-            
+
+            print(f"   检索到的距离：{distances[:3] if distances else '无'}")
+            print(f"   最大相关度分数：{max_relevance:.6f}")
+            print(f"   相关度高于阈值（命中）：{max_relevance >= max(0.0, min_relevance)}")
+
             if is_irrelevant:
-                print("   ℹ️  No relevant documents found - using model's native knowledge")
+                print("   ℹ️  未找到相关文档 - 使用模型的原生知识")
             else:
-                print(f"   ✅ Found {len(documents)} relevant documents - using knowledge base")
-            
-            # Stream answer using generator
+                print(f"   ✅ 找到 {len(documents)} 个相关文档 - 使用知识库")
+
+            # 使用生成器流式输出答案
             full_response = ""
-            
-            # Use RAG engine's generate_answer method (supports both Aliyun API and Ollama fallback)
-            # When is_irrelevant=True, it passes empty context_docs, and the engine will use model's native knowledge
+
+            # 使用 RAG 引擎的 generate_answer 方法（支持阿里云 API）
+            # 当 is_irrelevant=True 时，传递空的 context_docs，引擎将使用模型的原生知识
             answer_gen = st.session_state.rag_engine.generate_answer(
-                query=prompt,
-                context_docs=documents if not is_irrelevant else [],
-                stream=True
+                query=prompt, context_docs=documents if not is_irrelevant else [], stream=True
             )
-            
-            # Stream and display answer
+
+            # 流式显示答案
             if answer_gen:
                 for chunk in answer_gen:
                     if chunk:
                         full_response += chunk
                         message_placeholder.markdown(full_response + " ⏳")
             else:
-                full_response = "Error: Failed to generate answer"
-            
-            # Final display without loading indicator
+                full_response = "错误：生成答案失败"
+
+            # 最终显示，不带加载指示器
             message_placeholder.markdown(full_response)
-            
-            print(f"✅ Answer generated ({len(full_response)} characters)")
+
+            print(f"✅ 答案已生成（{len(full_response)} 个字符）")
             print(f"{'='*60}\n")
-            
-            # Prepare sources for display
+
+            # 准备显示来源
             sources = []
             if not is_irrelevant:
                 sources = [
@@ -245,49 +231,41 @@ if prompt := st.chat_input("Ask a question about your knowledge base..."):
                     }
                     for doc, meta, dist in zip(documents, metadatas, distances)
                 ]
-            
-            # Display sources if found
+
+            # 如果找到来源则显示
             if sources:
-                with st.expander("📚 View Sources"):
+                with st.expander("📚 查看来源"):
                     for i, source in enumerate(sources, 1):
-                        st.markdown(f"**Source {i}** (Relevance: {source['relevance_score']:.2%})")
+                        st.markdown(f"**来源 {i}** (相关度：{source['relevance_score']:.2%})")
                         st.text(source["content"])
                         img_path = source.get("metadata", {}).get("image_path")
                         if img_path:
                             st.image(img_path, width=160)
                         if source.get("metadata"):
-                            st.caption(f"File: {source['metadata'].get('file_name', 'Unknown')}")
+                            st.caption(f"文件：{source['metadata'].get('file_name', '未知')}")
                         st.divider()
-                
-                # Display top image
+
+                # 显示顶部图片
                 top_img = sources[0].get("metadata", {}).get("image_path")
                 if top_img:
                     st.image(top_img, width=240)
-            
-            # Save to chat history
+
+            # 保存到聊天历史
             st.session_state.chat_history.append(
                 {"role": "assistant", "content": full_response, "sources": sources}
             )
-            
+
             print(f"{'='*60}\n")
-            
+
         except Exception as e:
             err_msg = str(e)
-            print(f"❌ Error: {err_msg}")
-            # Highlight memory/model errors
-            if "out of memory" in err_msg.lower():
-                st.error(f"❌ Ollama out of memory or model too large:\n{err_msg}")
-            else:
-                st.error(f"❌ Ollama API error:\n{err_msg}")
+            print(f"❌ 错误：{err_msg}")
+            st.error(f"❌ API 错误：\n{err_msg}")
             st.session_state.chat_history.append({"role": "assistant", "content": err_msg, "sources": []})
 
-# Footer
+# 页脚
 st.divider()
-# ====================== Footer Model Information ======================
-# Display current model provider + ChromaDB description.
-api_key = os.getenv("EMBEDDING_MODEL_API_KEY", "") or os.getenv("GENERATION_MODEL_API_KEY", "")
-if api_key:
-    model_info = f"Aliyun DashScope ({os.getenv('ALIYUN_CHAT_MODEL', 'qwen-flash')})"
-else:
-    model_info = f"Ollama ({os.getenv('OLLAMA_MODEL', 'llama2:7b')})"
-st.caption(f"🤖 Powered by {model_info} and ChromaDB")
+# ====================== 页脚模型信息 ======================
+# 显示当前使用的模型和 ChromaDB 描述
+model_info = f"阿里云通义千问 ({os.getenv('ALIYUN_CHAT_MODEL', 'qwen-plus')})"
+st.caption(f"🤖 由 {model_info} 和 ChromaDB 驱动")

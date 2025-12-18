@@ -1,69 +1,61 @@
 ﻿"""
-RAG Engine - Core logic for Retrieval-Augmented Generation (Ollama version)
+RAG 引擎 - 检索增强生成的核心逻辑（阿里云 Qwen 版本）
 
-What is RAG?
-- RAG = Retrieval-Augmented Generation
-- Combines two steps: information retrieval and text generation
-  1. Retrieval: Find the most relevant documents from the knowledge base
-  2. Generation: Generate answers based on the retrieved documents
+什么是 RAG？
+- RAG = 检索增强生成（Retrieval-Augmented Generation）
+- 结合两个步骤：信息检索和文本生成
+  1. 检索：从知识库中找到最相关的文档
+  2. 生成：基于检索到的文档生成答案
 
-Why do we need RAG?
-- Large Language Models (LLMs) are powerful but have limited knowledge (training data cutoff)
-- RAG allows AI to access the latest, private, and domain-specific knowledge
-- Answers are verifiable and can cite sources, making them more reliable
+为什么需要 RAG？
+- 大语言模型（LLM）虽然强大，但知识有限（训练数据截止日期）
+- RAG 让 AI 可以访问最新、私有和领域专用知识
+- 答案可验证并可引用来源，更加可靠
 """
 
 from typing import List, Dict, Optional, Any
 import os
-import requests
+import re
 import chromadb
 from chromadb.config import Settings
 from dotenv import load_dotenv
 from openai import OpenAI
 
-# Load .env first to ensure environment variables are available during module initialization
+# 首先加载 .env 以确保环境变量在模块初始化时可用
 load_dotenv()
 
-# Read Ollama configuration from environment variables (fallback only)
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen:14b")
-OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", OLLAMA_MODEL)
-
-# Aliyun OpenAI-compatible API config (primary)
-GENERATION_MODEL_API_KEY = os.getenv("GENERATION_MODEL_API_KEY", "") or os.getenv("ALIYUN_MODEL_API_KEY", "")
-ALIYUN_BASE_URL = os.getenv(
-    "ALIYUN_COMPATIBLE_BASE_URL",
-    "https://dashscope.aliyuncs.com/compatible-mode/v1",
-)
-ALIYUN_CHAT_MODEL = os.getenv("ALIYUN_CHAT_MODEL", "qwen-flash")
+# 阿里云 API 配置
+ALIYUN_MODEL_API_KEY = os.getenv("ALIYUN_MODEL_API_KEY", "")
+ALIYUN_BASE_URL = os.getenv("ALIYUN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+ALIYUN_CHAT_MODEL = os.getenv("ALIYUN_CHAT_MODEL", "qwen-plus")
 ALIYUN_EMBED_MODEL = os.getenv("ALIYUN_EMBED_MODEL", "text-embedding-v4")
 ALIYUN_EMBED_DIM = int(os.getenv("ALIYUN_EMBED_DIM", "1024"))
-# API timeout in seconds (default 3 minutes)
+# API 超时时间（秒），默认 3 分钟
 ALIYUN_API_TIMEOUT = float(os.getenv("ALIYUN_API_TIMEOUT", "180"))
 
 
 class RAGEngine:
     """
-    RAG Engine Class
+    RAG 引擎类
 
-    Core Functions:
-    1. Convert user questions into vectors (embeddings)
-    2. Search for the most relevant documents in the vector database
-    3. Use the retrieved documents as context
-    4. Call the LLM to generate answers based on context
+    核心功能：
+    1. 将用户问题转换为向量（Embedding）
+    2. 在向量数据库中检索最相关的文档
+    3. 使用检索到的文档作为上下文
+    4. 调用大语言模型基于上下文生成答案
 
-    Workflow Example:
-        User question: "How to make Mojito?"
+    工作流程示例：
+        用户问题："如何制作某甜品？"
         ↓
-        1. Convert to vector: [0.23, -0.45, ...]
+        1. 向量化： [0.23, -0.45, ...]
         ↓
-        2. Search knowledge base: Find 3 relevant documents
+        2. 检索知识库：找到若干相关文档
         ↓
-        3. Build prompt: "Answer based on the following documents:\nDoc1...\nDoc2...\nQuestion: How to make Mojito?"
+        3. 构建提示词：基于文档与问题
         ↓
-        4. Call model: Generate answer
+        4. 调用模型：生成答案
         ↓
-        5. Return: Answer + source documents
+        5. 返回：答案 + 文档来源
     """
 
     def __init__(self, db_path: str = "./vector_db"):
@@ -74,103 +66,86 @@ class RAGEngine:
             db_path: Vector database path, default ./vector_db
                     This path should be consistent with the path used in data_loader.py
         """
-        # Initialize ChromaDB client (persistent storage)
+        # 初始化 ChromaDB 客户端（持久化存储）
         self.chroma_client = chromadb.PersistentClient(
             path=db_path, settings=Settings(anonymized_telemetry=False)
         )
 
-        # Get or create knowledge_base collection
-        # If the database doesn't exist, an empty collection will be created automatically
+        # 获取或创建 knowledge_base 集合
+        # 若数据库不存在，将自动创建一个空集合
         self.collection = self.chroma_client.get_or_create_collection(
-            name="knowledge_base", metadata={"description": "RAG Knowledge Base"}
+            name="knowledge_base", metadata={"description": "RAG 知识库"}
         )
-        
-        # Print initialization info
-        if GENERATION_MODEL_API_KEY:
-            print("✓ RAG Engine initialized")
-            print(f"  - Generation model: {ALIYUN_CHAT_MODEL} (Aliyun DashScope)")
-            print(f"  - Embedding model: {ALIYUN_EMBED_MODEL} (Aliyun DashScope)")
-            print(f"  - Database path: {db_path}")
-        else:
-            print("✓ RAG Engine initialized")
-            print(f"  - Generation model: {OLLAMA_MODEL} (Local Ollama)")
-            print(f"  - Embedding model: {OLLAMA_EMBED_MODEL} (Local Ollama)")
-            print(f"  - Ollama URL: {OLLAMA_BASE_URL}")
-            print(f"  - Database path: {db_path}")
+
+        # 打印初始化信息
+        print("✓ RAG 引擎已初始化")
+        print(f"  - 生成模型：{ALIYUN_CHAT_MODEL}（阿里云通义千问）")
+        print(f"  - 嵌入模型：{ALIYUN_EMBED_MODEL}（阿里云通义千问）")
+        print(f"  - 数据库路径：{db_path}")
 
     def get_embedding(self, text: str) -> List[float]:
         """
-        Generate vector representation (embedding) of text using Aliyun OpenAI-compatible API.
-        Falls back to Ollama if Aliyun config is missing.
-        """
-        # Prefer Aliyun OpenAI-compatible API when configured
-        if GENERATION_MODEL_API_KEY:
-            try:
-                client = OpenAI(
-                    api_key=GENERATION_MODEL_API_KEY,
-                    base_url=ALIYUN_BASE_URL,
-                    timeout=ALIYUN_API_TIMEOUT,  # Configurable timeout
-                )
-                completion = client.embeddings.create(
-                    model=ALIYUN_EMBED_MODEL,
-                    input=text,
-                    dimensions=ALIYUN_EMBED_DIM,
-                    encoding_format="float",
-                )
-                return completion.data[0].embedding
-            except Exception as e:
-                print(f"❌ Aliyun embedding API failed: {e}")
-                raise
+        使用阿里云 Qwen API 生成文本的向量表示（embedding）。
 
-        # Fallback: use local Ollama if Aliyun key not set
+        参数：
+            text: 要生成向量的文本
+
+        返回：
+            向量列表（浮点数列表）
+        """
+        if not ALIYUN_MODEL_API_KEY:
+            raise ValueError("❌ 未配置阿里云 API 密钥，请在 .env 文件中设置 ALIYUN_MODEL_API_KEY")
+
         try:
-            url = f"{OLLAMA_BASE_URL}/api/embeddings"
-            payload = {"model": OLLAMA_EMBED_MODEL, "prompt": text}
-            response = requests.post(url, json=payload, timeout=120)
-            response.raise_for_status()
-            return response.json()["embedding"]
-        except requests.exceptions.HTTPError as e:
-            err_msg = str(e)
-            if response is not None:
-                try:
-                    err_msg += f"\nOllama response: {response.text}"
-                except Exception:
-                    pass
-            if "memory" in err_msg.lower() or "out of memory" in err_msg.lower():
-                raise RuntimeError(f"Ollama out of memory or model too large: {err_msg}")
-            raise RuntimeError(f"Ollama API error: {err_msg}")
+            client = OpenAI(
+                api_key=ALIYUN_MODEL_API_KEY,
+                base_url=ALIYUN_BASE_URL,
+            )
+            response = client.embeddings.create(
+                model=ALIYUN_EMBED_MODEL, input=text, dimensions=ALIYUN_EMBED_DIM, encoding_format="float"
+            )
+            return response.data[0].embedding
         except Exception as e:
-            print(f"❌ Failed to generate embedding: {e}")
+            print(f"❌ 阿里云嵌入 API 失败：{e}")
             raise
 
     def _normalize_text(self, text: str) -> str:
         """
-        Normalize text for matching: convert to lowercase, remove special characters, compress whitespace.
+        规范化文本用于匹配：保留中文/英文字母和数字，移除标点符号，压缩空白符。
 
-        Example: "Apple-Jack!" -> "apple jack"
+        示例：
+        - "芒果-慕斯！" → "芒果 慕斯"
+        - "Coal-Ball Ice Cream!" → "coal ball ice cream"
         """
         import re
 
+        # 转换英文字母为小写（中文无影响）
         text = text.lower()
-        text = re.sub(r"[^a-z0-9\s]", " ", text)
+
+        # 移除标点符号，保留：中文字符、英文字母、数字、空白符
+        # \u4e00-\u9fa5 覆盖基本中文汉字范围
+        text = re.sub(r"[^\u4e00-\u9fa5a-z0-9\s]", " ", text)
+
+        # 压缩多个空白符为单个空格
         text = re.sub(r"\s+", " ", text)
+
         return text.strip()
 
     def _boost_exact_matches(self, query: str, results: Any) -> Any:
         """
-        Hybrid retrieval optimization: boost results with exact recipe name matches.
+        混合检索优化：通过精确匹配菜谱名称来提升结果排名。
 
-        Strategy:
-        1. Normalize user query (remove punctuation, convert to lowercase)
-        2. Check metadata.name field for each result
-        3. If recipe name matches query exactly or is highly related, significantly reduce distance score (boost ranking)
+        策略：
+        1. 规范化用户查询（移除标点符号，转换为小写）
+        2. 检查每个结果的 metadata.name 字段
+        3. 如果菜谱名称与查询完全匹配或高度相关，显著降低距离分数（提升排名）
 
-        Args:
-            query: User query
-            results: Raw ChromaDB retrieval results
+        参数：
+            query: 用户查询
+            results: 原始 ChromaDB 检索结果
 
-        Returns:
-            Optimized results (distance scores adjusted, ranking updated)
+        返回：
+            优化后的结果（距离分数已调整，排名已更新）
         """
         if not results or not results.get("metadatas") or not results["metadatas"][0]:
             return results
@@ -178,7 +153,7 @@ class RAGEngine:
         normalized_query = self._normalize_text(query)
         query_words = set(normalized_query.split())
 
-        # Iterate through each result and calculate exact match score
+        # 遍历每个结果，计算精确匹配分数
         documents = results["documents"][0]
         metadatas = results["metadatas"][0]
         distances = results["distances"][0]
@@ -193,24 +168,24 @@ class RAGEngine:
             normalized_name = self._normalize_text(name)
             name_words = set(normalized_name.split())
 
-            # Calculate match score
+            # 计算匹配分数
             boost_score = 0
 
-            # Exact match: reduce distance to near 0 (highest priority)
+            # 完全匹配：将距离降至接近 0（最高优先级）
             if normalized_query == normalized_name:
                 boost_score = 1000
-            # Query is substring of name or name is substring of query
+            # 查询是名称的子串，或名称是查询的子串
             elif normalized_query in normalized_name or normalized_name in normalized_query:
                 boost_score = 500
-            # Word-level match: calculate overlap ratio
+            # 词级匹配：计算重叠比例
             elif query_words and name_words:
                 overlap = len(query_words & name_words)
                 union = len(query_words | name_words)
                 if overlap > 0:
                     boost_score = int(300 * (overlap / union))
 
-            # Apply weighting: smaller distance = more relevant, higher boost_score = smaller distance
-            # Original distance * (1 - boost_factor), boost_factor range 0-0.99
+            # 应用权重：距离越小 = 越相关，boost_score 越高 = 距离越小
+            # 原始距离 * (1 - boost_factor)，boost_factor 范围 0-0.99
             if boost_score > 0:
                 boost_factor = min(0.99, boost_score / 1000)
                 adjusted_dist = dist * (1 - boost_factor)
@@ -219,10 +194,10 @@ class RAGEngine:
 
             boosted_results.append((doc, meta, adjusted_dist, boost_score))
 
-        # Re-sort by adjusted distance
+        # 按调整后的距离重新排序
         boosted_results.sort(key=lambda x: x[2])
 
-        # Reconstruct result format
+        # 重构结果格式
         results["documents"] = [[item[0] for item in boosted_results]]
         results["metadatas"] = [[item[1] for item in boosted_results]]
         results["distances"] = [[item[2] for item in boosted_results]]
@@ -231,64 +206,64 @@ class RAGEngine:
 
     def search(self, query: str, n_results: int = 5, filter_source: Optional[str] = None) -> Any:
         """
-        Search for documents most relevant to the question in the knowledge base (hybrid retrieval: vector similarity + exact match weighting)
+        在知识库中搜索与问题最相关的文档（混合检索：向量相似度 + 精确匹配加权）
 
-        This is the second step of RAG: retrieve relevant documents
+        这是 RAG 的第二步：检索相关文档
 
-        Search principle:
-        1. Convert question to vector: query_embedding
-        2. Calculate distance between question vector and all document vectors in database
-        3. Smaller distance = more relevant
-        4. **New addition**: If query contains recipe name keywords, boost exact match results
-        5. Return n_results documents with smallest distances
+        搜索原理：
+        1. 将问题转换为向量：query_embedding
+        2. 计算问题向量与数据库中所有文档向量的距离
+        3. 距离越小 = 越相关
+        4. **新增**：如果查询包含甜品名称关键词，提升精确匹配结果
+        5. 返回距离最小的 n_results 个文档
 
-        Distance calculation method used:
-        - Usually Cosine Similarity or Euclidean Distance
-        - ChromaDB defaults to cosine similarity
+        使用的距离计算方法：
+        - 通常是余弦相似度或欧氏距离
+        - ChromaDB 默认使用余弦相似度
 
-        Hybrid retrieval optimization:
-        - When user queries "Apple Jack", documents with name field "Apple Jack" will be returned first
-        - Even if vector similarity is not highest, exact match will boost ranking
+        混合检索优化：
+        - 当用户查询"煤球冰淇淋"时，name 字段为"煤球冰淇淋"的文档将优先返回
+        - 即使向量相似度不是最高，精确匹配也会提升排名
 
-        Args:
-            query: User's question, e.g., "How to make Mojito?"
-            n_results: Number of most relevant documents to return, default 5
-                      More documents = more comprehensive but may have noise
-                      Fewer documents = more precise but may miss information
-            filter_source: Filter by data source, e.g., "file" or "git"
-                          None means no filter, search all sources
+        参数：
+            query: 用户的问题，例如 "如何制作提拉米苏？"
+            n_results: 返回最相关的文档数量，默认 5
+                      文档越多 = 越全面但可能有噪音
+                      文档越少 = 越精确但可能遗漏信息
+            filter_source: 按数据源过滤，例如 "file" 或 "git"
+                          None 表示不过滤，搜索所有来源
 
-        Returns:
-            Search result dictionary containing:
+        返回：
+            搜索结果字典，包含：
             {
-                'documents': [[doc1, doc2, ...]],  # Retrieved document content
-                'metadatas': [[meta1, meta2, ...]],  # Document metadata (filenames, etc.)
-                'distances': [[dist1, dist2, ...]]   # Similarity distances (smaller = more relevant, with weighting applied)
+                'documents': [[doc1, doc2, ...]],  # 检索到的文档内容
+                'metadatas': [[meta1, meta2, ...]],  # 文档元数据（文件名等）
+                'distances': [[dist1, dist2, ...]]   # 相似度距离（越小 = 越相关，已应用加权）
             }
         """
         try:
-            # 1. Convert question to vector
+            # 1. 将问题转换为向量
             query_embedding = self.get_embedding(query)
 
-            # 2. Build filter condition (if filter_source is specified)
+            # 2. 构建过滤条件（如果指定了 filter_source）
             where_filter: Optional[Dict] = None
             if filter_source:
                 where_filter = {"source": filter_source}
 
-            # 3. Search in vector database (retrieve more candidates for re-ranking after exact match weighting)
-            # For small datasets, search more candidates to ensure exact matches are recalled
-            search_n = min(max(n_results * 5, 30), 100)  # Search more candidates, max 100
+            # 3. 在向量数据库中搜索（检索更多候选以便精确匹配加权后重新排序）
+            # 对于小数据集，搜索更多候选以确保精确匹配被召回
+            search_n = min(max(n_results * 5, 30), 100)  # 搜索更多候选，最多 100
             results = self.collection.query(
-                query_embeddings=[query_embedding],  # Question vector
-                n_results=search_n,  # Number of candidates to return
-                where=where_filter,  # type: ignore  # Filter condition
-                include=["documents", "metadatas", "distances"],  # Content to return
+                query_embeddings=[query_embedding],  # 问题向量
+                n_results=search_n,  # 返回的候选数量
+                where=where_filter,  # type: ignore  # 过滤条件
+                include=["documents", "metadatas", "distances"],  # 返回的内容
             )
 
-            # 4. Apply exact match weighting optimization
+            # 4. 应用精确匹配加权优化
             results = self._boost_exact_matches(query, results)
 
-            # 5. Trim to final n_results needed
+            # 5. 裁剪到最终所需的 n_results
             if results and results.get("documents"):
                 results["documents"] = [results["documents"][0][:n_results]]
                 results["metadatas"] = [results["metadatas"][0][:n_results]]
@@ -297,120 +272,83 @@ class RAGEngine:
             return results
 
         except Exception as e:
-            print(f"❌ Search failed: {e}")
+            print(f"❌ 搜索失败：{e}")
             raise
 
     def generate_answer(
-        self, query: str, context_docs: List[str], chat_history: Optional[List[Dict]] = None, stream: bool = False
+        self,
+        query: str,
+        context_docs: List[str],
+        chat_history: Optional[List[Dict]] = None,
+        stream: bool = False,
     ):
         """
-        Generate answer based on retrieved documents using Aliyun OpenAI-compatible API.
-        Falls back to Ollama if Aliyun config is missing.
-        """
-        # 1. Check if we have context documents
-        has_context = context_docs and any(doc.strip() for doc in context_docs)
-        
-        # 2. Build message content
-        if has_context:
-            context = "\n\n".join([f"Document {i+1}:\n{doc}" for i, doc in enumerate(context_docs)])
-            user_content = f"""
-Please answer the question based on the following context.
-If the context doesn't provide sufficient information, please state so honestly.
+        使用阿里云 Qwen API 基于检索到的文档生成答案。
 
-Context:
+        参数：
+            query: 用户问题
+            context_docs: 检索到的上下文文档列表
+            chat_history: 对话历史（可选，暂未使用）
+            stream: 是否使用流式输出
+
+        返回：
+            生成的答案字符串，或流式生成器
+        """
+        if not ALIYUN_MODEL_API_KEY:
+            raise ValueError("❌ 未配置阿里云 API 密钥，请在 .env 文件中设置 ALIYUN_MODEL_API_KEY")
+
+        # 1. 检查是否有上下文文档
+        has_context = context_docs and any(doc.strip() for doc in context_docs)
+
+        # 2. 构建消息内容
+        if has_context:
+            context = "\n\n".join([f"文档 {i+1}：\n{doc}" for i, doc in enumerate(context_docs)])
+            user_content = f"""
+请基于以下上下文回答问题。
+如果上下文没有提供足够的信息，请如实说明。
+
+上下文：
 {context}
 
-Question: {query}
+问题：{query}
 """
         else:
-            user_content = f"Please answer the following question using your own knowledge:\n\nQuestion: {query}"
+            user_content = f"请使用你自己的知识回答以下问题：\n\n问题：{query}"
 
-        # 3. Call Aliyun OpenAI-compatible chat API
-        if GENERATION_MODEL_API_KEY:
-            try:
-                client = OpenAI(
-                    api_key=GENERATION_MODEL_API_KEY,
-                    base_url=ALIYUN_BASE_URL,
-                    timeout=ALIYUN_API_TIMEOUT,  # Configurable timeout
-                )
-                if not stream:
-                    completion = client.chat.completions.create(
-                        model=ALIYUN_CHAT_MODEL,
-                        messages=[
-                            {"role": "system", "content": "You are a helpful assistant."},
-                            {"role": "user", "content": user_content},
-                        ],
-                    )
-                    return completion.choices[0].message.content
-                else:
-                    # Streaming mode
-                    stream_resp = client.chat.completions.create(
-                        model=ALIYUN_CHAT_MODEL,
-                        messages=[
-                            {"role": "system", "content": "You are a helpful assistant."},
-                            {"role": "user", "content": user_content},
-                        ],
-                        stream=True,
-                    )
-                    def aliyun_stream_generator():
-                        for chunk in stream_resp:
-                            if chunk.choices and chunk.choices[0].delta.content:
-                                yield chunk.choices[0].delta.content
-                    return aliyun_stream_generator()
-            except Exception as e:
-                print(f"❌ Aliyun chat API failed: {e}")
-                raise
-
-        # Fallback: use local Ollama
+        # 3. 调用阿里云 Qwen API
         try:
-            import json
-            # Build Ollama-style prompt
-            if has_context:
-                context = "\n\n".join([f"Document {i+1}:\n{doc}" for i, doc in enumerate(context_docs)])
-                prompt = f"""
-You are a helpful AI assistant. Please answer the question based on the following context.
-If the context doesn't provide sufficient information, please state so honestly.
-
-Context:
-{context}
-
-Question: {query}
-"""
-            else:
-                prompt = f"""Please answer the following question using your own knowledge:\n\nQuestion: {query}"""
-
-            url = f"{OLLAMA_BASE_URL}/api/generate"
-            payload = {"model": OLLAMA_MODEL, "prompt": prompt, "stream": stream}
-            
+            client = OpenAI(
+                api_key=ALIYUN_MODEL_API_KEY,
+                base_url=ALIYUN_BASE_URL,
+            )
             if not stream:
-                response = requests.post(url, json=payload, timeout=120)
-                response.raise_for_status()
-                return response.json()["response"]
+                completion = client.chat.completions.create(
+                    model=ALIYUN_CHAT_MODEL,
+                    messages=[
+                        {"role": "system", "content": "你是一个有帮助的AI助手。"},
+                        {"role": "user", "content": user_content},
+                    ],
+                )
+                return completion.choices[0].message.content
             else:
-                response = requests.post(url, json=payload, timeout=120, stream=True)
-                response.raise_for_status()
-                def ollama_stream_generator():
-                    for line in response.iter_lines():
-                        if line:
-                            try:
-                                chunk = json.loads(line)
-                                if "response" in chunk:
-                                    yield chunk["response"]
-                            except json.JSONDecodeError:
-                                continue
-                return ollama_stream_generator()
-        except requests.exceptions.HTTPError as e:
-            err_msg = str(e)
-            try:
-                if hasattr(e, 'response') and e.response is not None:
-                    err_msg += f"\nOllama response: {e.response.text}"
-            except Exception:
-                pass
-            if "memory" in err_msg.lower() or "out of memory" in err_msg.lower():
-                raise RuntimeError(f"Ollama out of memory or model too large: {err_msg}")
-            raise RuntimeError(f"Ollama API error: {err_msg}")
+                # 流式模式
+                stream_resp = client.chat.completions.create(
+                    model=ALIYUN_CHAT_MODEL,
+                    messages=[
+                        {"role": "system", "content": "你是一个有帮助的AI助手。"},
+                        {"role": "user", "content": user_content},
+                    ],
+                    stream=True,
+                )
+
+                def qwen_stream_generator():
+                    for chunk in stream_resp:
+                        if chunk.choices and chunk.choices[0].delta.content:
+                            yield chunk.choices[0].delta.content
+
+                return qwen_stream_generator()
         except Exception as e:
-            print(f"❌ Failed to generate answer: {e}")
+            print(f"❌ 阿里云对话 API 失败：{e}")
             raise
 
     def query(
@@ -422,159 +360,157 @@ Question: {query}
         min_relevance: float = 0.0,
     ) -> Dict:
         """
-        Complete RAG query workflow (main entry method)
+        完整的 RAG 查询工作流（主入口方法）
 
-        This method integrates the three steps of RAG:
-        1. Search: Find relevant documents
-        2. Generate answer: Generate answer based on documents
-        3. Wrap results: Return answer and sources together
+        此方法整合了 RAG 的三个步骤：
+        1. 搜索：查找相关文档
+        2. 生成答案：基于文档生成答案
+        3. 包装结果：将答案和来源一起返回
 
-        Complete workflow:
-            User question
+        完整工作流：
+            用户问题
             ↓
-            Convert to vector
+            转换为向量
             ↓
-            Search knowledge base → Find 3 documents
+            搜索知识库 → 找到 3 个文档
             ↓
-            If documents found:
+            如果找到文档：
                 ↓
-                Use documents as context
+                使用文档作为上下文
                 ↓
-                Call model to generate answer
+                调用模型生成答案
                 ↓
-                Return: Answer + document sources
+                返回：答案 + 文档来源
 
-            If no documents found:
+            如果没有找到文档：
                 ↓
-                Let model answer using its own knowledge
+                让模型使用自己的知识回答
                 ↓
-                Return: Answer + note "from model's native knowledge base"
+                返回：答案 + 注明"来自模型的原生知识库"
 
-        Args:
-            question: User's question
-            n_results: Number of documents to retrieve
-            filter_source: Filter data source
-            chat_history: Chat history (reserved)
+        参数：
+            question: 用户的问题
+            n_results: 检索的文档数量
+            filter_source: 过滤数据源
+            chat_history: 对话历史（保留）
+            min_relevance: 最小相关度阈值
 
-        Returns:
-            Result dictionary:
+        返回：
+            结果字典：
             {
-                'answer': "Answer text",
-                'sources': [                    # List of answer sources
+                'answer': "答案文本",
+                'sources': [                    # 答案来源列表
                     {
-                        'content': "Document snippet",   # Document content (first 200 chars)
-                        'metadata': {...},       # Metadata (filename, etc.)
-                        'relevance_score': 0.85  # Relevance score (0-1)
+                        'content': "文档片段",   # 文档内容（前 200 字符）
+                        'metadata': {...},       # 元数据（文件名等）
+                        'relevance_score': 0.85  # 相关度分数（0-1）
                     },
                     ...
                 ],
-                'raw_results': {...}            # Raw search results
+                'raw_results': {...}            # 原始搜索结果
             }
         """
         try:
-            # Step 1: Search for relevant documents
+            # 步骤 1：搜索相关文档
             search_results = self.search(query=question, n_results=n_results, filter_source=filter_source)
 
-            # Extract search results
+            # 提取搜索结果
             documents = search_results["documents"][0] if search_results["documents"] else []
             metadatas = search_results["metadatas"][0] if search_results["metadatas"] else []
             distances = search_results["distances"][0] if search_results["distances"] else []
 
-            # Step 2: Check if relevant documents are found or relevance is below threshold
-            # relevance = 1 - distance; Compare max relevance with threshold
+            # 步骤 2：检查是否找到相关文档或相关度低于阈值
+            # 相关度 = 1 - 距离；比较最大相关度与阈值
             max_relevance = 0.0
             if distances:
                 try:
                     max_relevance = max(1 - d for d in distances)
-                    # Debug output: view actual distances and relevance
-                    print(f"\n🔍 Retrieval Analysis:")
-                    print(f"   Question: {question}")
-                    print(f"   Top 3 distances: {distances[:3]}")
-                    print(f"   Top 3 relevance scores (1-distance): {[round(1-d, 6) for d in distances[:3]]}")
-                    print(f"   Max relevance score: {max_relevance:.6f}")
-                    print(f"   Relevance threshold: {min_relevance:.6f}")
-                    print(f"   Meets threshold: {max_relevance >= max(0.0, min_relevance)}")
+                    # 调试输出：查看实际距离和相关度
+                    print(f"\n🔍 检索分析：")
+                    print(f"   问题：{question}")
+                    print(f"   前 3 个距离：{distances[:3]}")
+                    print(f"   前 3 个相关度分数（1-距离）：{[round(1-d, 6) for d in distances[:3]]}")
+                    print(f"   最大相关度分数：{max_relevance:.6f}")
+                    print(f"   相关度阈值：{min_relevance:.6f}")
+                    print(f"   满足阈值：{max_relevance >= max(0.0, min_relevance)}")
                 except Exception:
                     max_relevance = 0.0
 
             is_irrelevant = (not documents) or (max_relevance < max(0.0, min_relevance))
 
             if is_irrelevant:
-                # Case A: No relevant documents found
-                # Let model answer using its own native knowledge
-                if GENERATION_MODEL_API_KEY:
-                    try:
-                        client = OpenAI(
-                            api_key=GENERATION_MODEL_API_KEY,
-                            base_url=ALIYUN_BASE_URL,
-                            timeout=ALIYUN_API_TIMEOUT,  # Configurable timeout
-                        )
-                        completion = client.chat.completions.create(
-                            model=ALIYUN_CHAT_MODEL,
-                            messages=[
-                                {"role": "system", "content": "You are a helpful assistant."},
-                                {"role": "user", "content": f"Please answer the following question using your own knowledge. Do not cite knowledge base or fabricate sources:\n{question}"},
-                            ],
-                        )
-                        answer = completion.choices[0].message.content
-                    except Exception as e:
-                        answer = f"Error: {str(e)}"
-                else:
-                    # Fallback to Ollama
-                    prompt = f"Please answer the following question using your own knowledge. Do not cite knowledge base or fabricate sources:\n{question}"
-                    url = f"{OLLAMA_BASE_URL}/api/generate"
-                    payload = {"model": OLLAMA_MODEL, "prompt": prompt, "stream": False}
-                    try:
-                        response = requests.post(url, json=payload, timeout=120)
-                        response.raise_for_status()
-                        answer = response.json()["response"]
-                    except Exception as e:
-                        answer = f"Error: {str(e)}"
+                # 情况 A：未找到相关文档
+                # 让模型使用自己的原生知识回答
+                if not ALIYUN_MODEL_API_KEY:
+                    return {
+                        "answer": "❌ 未配置阿里云 API 密钥，无法回答问题",
+                        "sources": [],
+                        "raw_results": search_results,
+                    }
 
-                # Return answer without any knowledge base sources
+                try:
+                    client = OpenAI(
+                        api_key=ALIYUN_MODEL_API_KEY,
+                        base_url=ALIYUN_BASE_URL,
+                    )
+                    completion = client.chat.completions.create(
+                        model=ALIYUN_CHAT_MODEL,
+                        messages=[
+                            {"role": "system", "content": "你是一个有帮助的AI助手。"},
+                            {
+                                "role": "user",
+                                "content": f"请使用你自己的知识回答以下问题。不要引用知识库或编造来源：\n{question}",
+                            },
+                        ],
+                    )
+                    answer = completion.choices[0].message.content
+                except Exception as e:
+                    answer = f"错误：{str(e)}"
+
+                # 返回答案，不包含任何知识库来源
                 return {
                     "answer": answer,
                     "sources": [],
                     "raw_results": search_results,
                 }
 
-            # Case B: Relevant documents found
-            # Step 3: Generate answer based on retrieved documents
+            # 情况 B：找到相关文档
+            # 步骤 3：基于检索到的文档生成答案
             answer = self.generate_answer(query=question, context_docs=documents, chat_history=chat_history)
 
-            # Step 4: Organize source information
-            # Package document content, metadata, and relevance scores
+            # 步骤 4：组织来源信息
+            # 打包文档内容、元数据和相关度分数
             sources = [
                 {
-                    # Only display first 200 characters
+                    # 仅显示前 200 个字符
                     "content": doc[:200] + "..." if len(doc) > 200 else doc,
-                    "metadata": meta,  # Filename, chunk number, etc.
-                    "relevance_score": 1 - dist,  # Smaller distance = more relevant, convert to score (0-1)
+                    "metadata": meta,  # 文件名、块编号等
+                    "relevance_score": 1 - dist,  # 距离越小 = 越相关，转换为分数（0-1）
                 }
                 for doc, meta, dist in zip(documents, metadatas, distances)
             ]
 
-            # Step 5: Return complete results
+            # 步骤 5：返回完整结果
             return {"answer": answer, "sources": sources, "raw_results": search_results}
 
         except Exception as e:
-            print(f"❌ Query failed: {e}")
-            return {"answer": f"Error: {str(e)}", "sources": [], "raw_results": None}
+            print(f"❌ 查询失败：{e}")
+            return {"answer": f"错误：{str(e)}", "sources": [], "raw_results": None}
 
     def get_stats(self) -> Dict:
         """
-        Get knowledge base statistics
+        获取知识库统计信息
 
-        Returns:
-            Statistics dictionary:
+        返回：
+            统计字典：
             {
-                'total_documents': 150,          # Number of document chunks in database
-                'collection_name': 'knowledge_base'  # Collection name
+                'total_documents': 150,          # 数据库中的文档块数量
+                'collection_name': 'knowledge_base'  # 集合名称
             }
         """
         try:
             count = self.collection.count()
             return {"total_documents": count, "collection_name": self.collection.name}
         except Exception as e:
-            print(f"❌ Failed to get statistics: {e}")
+            print(f"❌ 获取统计信息失败：{e}")
             return {"total_documents": 0, "collection_name": "unknown"}
