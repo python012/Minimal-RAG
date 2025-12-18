@@ -163,52 +163,48 @@ if prompt := st.chat_input("向您的知识库提问..."):
 
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
-        
+
         try:
             # 使用 RAG 引擎查询方法（内部处理相关度检查）
             print(f"\n{'='*60}")
             print(f"🔍 处理查询：{prompt}")
             print(f"   最小相关度阈值：{min_relevance}")
             print(f"{'='*60}")
-            
+
             # 获取搜索结果并检查相关度
             search_results = st.session_state.rag_engine.search(
-                query=prompt,
-                n_results=n_results,
-                filter_source=filter_source
+                query=prompt, n_results=n_results, filter_source=filter_source
             )
-            
+
             documents = search_results["documents"][0] if search_results["documents"] else []
             metadatas = search_results["metadatas"][0] if search_results["metadatas"] else []
             distances = search_results["distances"][0] if search_results["distances"] else []
-            
+
             # 检查相关度
             max_relevance = 0.0
             if distances:
                 max_relevance = max(1 - d for d in distances)
-            
+
             is_irrelevant = (not documents) or (max_relevance < max(0.0, min_relevance))
-            
+
             print(f"   检索到的距离：{distances[:3] if distances else '无'}")
             print(f"   最大相关度分数：{max_relevance:.6f}")
             print(f"   相关度高于阈值（命中）：{max_relevance >= max(0.0, min_relevance)}")
-            
+
             if is_irrelevant:
                 print("   ℹ️  未找到相关文档 - 使用模型的原生知识")
             else:
                 print(f"   ✅ 找到 {len(documents)} 个相关文档 - 使用知识库")
-            
+
             # 使用生成器流式输出答案
             full_response = ""
-            
+
             # 使用 RAG 引擎的 generate_answer 方法（支持阿里云 API）
             # 当 is_irrelevant=True 时，传递空的 context_docs，引擎将使用模型的原生知识
             answer_gen = st.session_state.rag_engine.generate_answer(
-                query=prompt,
-                context_docs=documents if not is_irrelevant else [],
-                stream=True
+                query=prompt, context_docs=documents if not is_irrelevant else [], stream=True
             )
-            
+
             # 流式显示答案
             if answer_gen:
                 for chunk in answer_gen:
@@ -217,13 +213,13 @@ if prompt := st.chat_input("向您的知识库提问..."):
                         message_placeholder.markdown(full_response + " ⏳")
             else:
                 full_response = "错误：生成答案失败"
-            
+
             # 最终显示，不带加载指示器
             message_placeholder.markdown(full_response)
-            
+
             print(f"✅ 答案已生成（{len(full_response)} 个字符）")
             print(f"{'='*60}\n")
-            
+
             # 准备显示来源
             sources = []
             if not is_irrelevant:
@@ -235,7 +231,7 @@ if prompt := st.chat_input("向您的知识库提问..."):
                     }
                     for doc, meta, dist in zip(documents, metadatas, distances)
                 ]
-            
+
             # 如果找到来源则显示
             if sources:
                 with st.expander("📚 查看来源"):
@@ -248,19 +244,19 @@ if prompt := st.chat_input("向您的知识库提问..."):
                         if source.get("metadata"):
                             st.caption(f"文件：{source['metadata'].get('file_name', '未知')}")
                         st.divider()
-                
+
                 # 显示顶部图片
                 top_img = sources[0].get("metadata", {}).get("image_path")
                 if top_img:
                     st.image(top_img, width=240)
-            
+
             # 保存到聊天历史
             st.session_state.chat_history.append(
                 {"role": "assistant", "content": full_response, "sources": sources}
             )
-            
+
             print(f"{'='*60}\n")
-            
+
         except Exception as e:
             err_msg = str(e)
             print(f"❌ 错误：{err_msg}")

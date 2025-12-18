@@ -20,10 +20,7 @@ load_dotenv()
 
 # 阿里云 API 配置
 ALIYUN_MODEL_API_KEY = os.getenv("ALIYUN_MODEL_API_KEY", "")
-ALIYUN_BASE_URL = os.getenv(
-    "ALIYUN_BASE_URL",
-    "https://dashscope.aliyuncs.com/compatible-mode/v1"
-)
+ALIYUN_BASE_URL = os.getenv("ALIYUN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
 ALIYUN_EMBED_MODEL = os.getenv("ALIYUN_EMBED_MODEL", "text-embedding-v4")
 ALIYUN_EMBED_DIM = int(os.getenv("ALIYUN_EMBED_DIM", "1024"))
 # API 超时时间（秒），默认 3 分钟
@@ -90,10 +87,7 @@ class DataLoader:
                 base_url=ALIYUN_BASE_URL,
             )
             response = client.embeddings.create(
-                model=ALIYUN_EMBED_MODEL,
-                input=text,
-                dimensions=ALIYUN_EMBED_DIM,
-                encoding_format="float"
+                model=ALIYUN_EMBED_MODEL, input=text, dimensions=ALIYUN_EMBED_DIM, encoding_format="float"
             )
             return response.data[0].embedding
         except Exception as e:
