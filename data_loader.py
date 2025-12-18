@@ -1,37 +1,31 @@
 """
-Data Loader - Load documents into vector database
-Supports text chunking, batch import, statistics query and other features
+数据加载器 - 将文档加载到向量数据库
+支持文本分块、批量导入、统计查询等功能
+使用 Azure OpenAI API 生成向量嵌入和对话
 """
 
 import os
 import sys
 import glob
 import argparse
+import json
 from typing import List, Dict, Optional
-import requests
-from openai import OpenAI
 import chromadb
 from chromadb.config import Settings
 from dotenv import load_dotenv
+from openai import AzureOpenAI
 
-# Load .env first to ensure environment variables are available (otherwise module-level os.getenv won't read them)
+# 首先加载 .env 以确保环境变量可用
 load_dotenv()
 
-# Read Ollama configuration from environment variables (still used elsewhere)
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:14b")
-OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", OLLAMA_MODEL)
-
-# Aliyun embedding API config (OpenAI-compatible mode)
-EMBEDDING_MODEL_API_KEY = os.getenv("EMBEDDING_MODEL_API_KEY", "")
-ALIYUN_BASE_URL = os.getenv(
-    "ALIYUN_COMPATIBLE_BASE_URL",
-    "https://dashscope.aliyuncs.com/compatible-mode/v1",
-)
-ALIYUN_EMBED_MODEL = os.getenv("ALIYUN_EMBED_MODEL", "text-embedding-v4")
-ALIYUN_EMBED_DIM = int(os.getenv("ALIYUN_EMBED_DIM", "1024"))
-# API timeout in seconds (default 3 minutes)
-ALIYUN_API_TIMEOUT = float(os.getenv("ALIYUN_API_TIMEOUT", "180"))
+# Azure OpenAI API 配置
+AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY", "")
+AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+AZURE_DEPLOYMENT_NAME_CHAT = os.getenv("AZURE_DEPLOYMENT_NAME_CHAT", "gpt-4-mini")
+AZURE_DEPLOYMENT_NAME_EMBED = os.getenv("AZURE_DEPLOYMENT_NAME_EMBED", "text-embedding-3-small")
+AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
+# API 超时时间（秒），默认 3 分钟
+AZURE_API_TIMEOUT = float(os.getenv("AZURE_API_TIMEOUT", "180"))
 
 
 class DataLoader:
@@ -69,56 +63,38 @@ class DataLoader:
             name="knowledge_base", metadata={"description": "RAG Knowledge Base"}
         )
 
-        print("✓ Data loader initialized")
-        if EMBEDDING_MODEL_API_KEY:
-            print(f"  - Embedding model: {ALIYUN_EMBED_MODEL} (Aliyun DashScope)")
-            print(f"  - API base URL: {ALIYUN_BASE_URL}")
-        else:
-            print(f"  - Embedding model: {OLLAMA_EMBED_MODEL} (Local Ollama)")
-            print(f"  - Ollama URL: {OLLAMA_BASE_URL}")
-        print(f"  - Database path: {db_path}")
+        print("✓ 数据加载器已初始化")
+        print(f"  - 嵌入模型：{AZURE_DEPLOYMENT_NAME_EMBED}（Azure OpenAI）")
+        print(f"  - 生成模型：{AZURE_DEPLOYMENT_NAME_CHAT}（Azure OpenAI）")
+        print(f"  - API 端点：{AZURE_OPENAI_ENDPOINT}")
+        print(f"  - 数据库路径：{db_path}")
 
     def get_embedding(self, text: str) -> List[float]:
         """
-        Generate vector representation (embedding) of text using Aliyun OpenAI-compatible API.
+        使用 Azure OpenAI API 生成文本的向量表示（embedding）。
 
-        Falls back to Ollama only if Aliyun config is missing.
+        参数：
+            text: 要生成向量的文本
+
+        返回：
+            向量列表（浮点数列表）
         """
-        # Prefer Aliyun OpenAI-compatible API when configured
-        if EMBEDDING_MODEL_API_KEY:
-            try:
-                client = OpenAI(
-                    api_key=EMBEDDING_MODEL_API_KEY,
-                    base_url=ALIYUN_BASE_URL,
-                    timeout=ALIYUN_API_TIMEOUT,  # Configurable timeout
-                )
-                completion = client.embeddings.create(
-                    model=ALIYUN_EMBED_MODEL,
-                    input=text,
-                    dimensions=ALIYUN_EMBED_DIM,
-                    encoding_format="float",
-                )
-                # Response format per demo: { data: [{ embedding: [...]}], ... }
-                return completion.data[0].embedding
-            except Exception as e:
-                print(f"❌ Aliyun embedding API failed: {e}")
-                raise
+        if not AZURE_OPENAI_API_KEY or not AZURE_OPENAI_ENDPOINT:
+            raise ValueError("❌ 未配置 Azure OpenAI 密钥或端点，请在 .env 文件中设置 AZURE_OPENAI_API_KEY 和 AZURE_OPENAI_ENDPOINT")
 
-        # Fallback: use local Ollama if Aliyun key not set
         try:
-            url = f"{OLLAMA_BASE_URL}/api/embeddings"
-            payload = {"model": OLLAMA_EMBED_MODEL, "prompt": text}
-            response = requests.post(url, json=payload, timeout=120)
-            response.raise_for_status()
-            return response.json()["embedding"]
-        except requests.exceptions.Timeout:
-            print(f"❌ Embedding generation timeout (text length: {len(text)} characters)")
-            raise
-        except requests.exceptions.RequestException as e:
-            print(f"❌ Ollama API call failed: {e}")
-            raise
-        except KeyError:
-            print("❌ Ollama response format error, missing 'embedding' field")
+            client = AzureOpenAI(
+                api_key=AZURE_OPENAI_API_KEY,
+                api_version=AZURE_OPENAI_API_VERSION,
+                azure_endpoint=AZURE_OPENAI_ENDPOINT,
+            )
+            response = client.embeddings.create(
+                model=AZURE_DEPLOYMENT_NAME_EMBED,
+                input=text,
+            )
+            return response.data[0].embedding
+        except Exception as e:
+            print(f"❌ Azure OpenAI 嵌入 API 失败：{e}")
             raise
 
     def split_text(self, text: str, chunk_size: int = 1000, overlap: int = 200) -> List[str]:
@@ -264,9 +240,10 @@ class DataLoader:
         Supports common extensions: .jpg / .jpeg / .png
         Returns matched relative path (e.g. data/images/xxx.jpg), or None if not matched.
         """
-        # Support multiple image directories and explicit filenames
+        # 支持多个图片目录和显式文件名
         image_dirs = [
             os.path.join("data", "images"),
+            os.path.join("data2", "images"),
         ]
 
         # If JSON provides explicit filename, try matching with that first
@@ -290,106 +267,91 @@ class DataLoader:
 
     def load_json_recipe_file(self, file_path: str, source_type: str = "file") -> int:
         """
-        Load single JSON recipe file into vector database.
+        将单个 JSON 甜品文件加载到向量数据库。
 
-        Parse fields and generate semantic text for embedding; automatically match same-name image path and write to metadata.
+        解析字段并生成语义文本用于嵌入；自动匹配同名图片路径并写入元数据。
 
-        Expected JSON fields (compatible as much as possible, skip if field missing):
-        - name: Name
-        - tags: Tags (array or comma-separated string)
-        - glass: Glass/utensil
-        - ingredients: Ingredients (list, elements may contain name/amount/unit, etc.)
-        - instructions: Steps/methods (string or string list)
-        - garnish: Garnish
-        - alcoholic: Whether contains alcohol (boolean or string)
+        支持的 JSON 字段（中文字段）：
+        - 名称 / name：甜品名称（必需）
+        - 描述 / description：甜品描述
+        - 类型 / type：甜品类型（如"冰淇淋"、"布丁"等）
+        - 关键词 / keywords / tags：标签数组或逗号分隔字符串
+        - 配料 / ingredients：配料列表，元素为 {数量, 单位, 原料} 的字典
+        - 步骤 / directions / instructions：制作步骤（字符串或字符串列表）
+        - 图片 / image：图片文件名
+        - 来源 / source：资料来源
         """
         try:
-            import json
-
             with open(file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
-            # Normalize fields (adapt to actual JSON structure)
-            name = str(data.get("name") or os.path.splitext(os.path.basename(file_path))[0])
-            description = data.get("description") or ""
+            # 标准化字段（中文优先）
+            name = str(
+                data.get("名称") or data.get("name") or os.path.splitext(os.path.basename(file_path))[0]
+            )
+            description = data.get("描述") or data.get("description") or ""
+            recipe_type = data.get("类型") or data.get("type") or ""
 
-            # keywords field corresponds to tags
-            tags = data.get("keywords") or data.get("tags") or []
+            # 关键词字段
+            tags = data.get("关键词") or data.get("keywords") or data.get("tags") or []
             if isinstance(tags, str):
                 tags = [t.strip() for t in tags.split(",") if t.strip()]
 
-            glass = data.get("glass") or ""
-            garnish = data.get("garnish") or ""
-            alcoholic = data.get("alcoholic")
-
-            ingredients = data.get("ingredients") or []
+            # 配料字段（仅支持中文格式）
+            ingredients = data.get("配料") or data.get("ingredients") or []
             ing_lines: List[str] = []
             if isinstance(ingredients, list):
                 for ing in ingredients:
                     if isinstance(ing, dict):
-                        # Adapt to actual fields:quantity, measure, ingredient
-                        quantity = str(ing.get("quantity") or ing.get("amount", "")).strip()
-                        measure = str(ing.get("measure") or ing.get("unit", "")).strip()
-                        ingredient = str(ing.get("ingredient") or ing.get("name", "")).strip()
-                        parts = [quantity, measure, ingredient]
-                        line = " ".join([p for p in parts if p])
+                        qty = str(ing.get("数量") or ing.get("quantity") or "").strip()
+                        measure = str(ing.get("单位") or ing.get("measure") or "").strip()
+                        ingredient_name = str(ing.get("原料") or ing.get("ingredient") or "").strip()
+                        line = " ".join([p for p in [qty, measure, ingredient_name] if p])
                         if line:
                             ing_lines.append(f"- {line}")
                     elif isinstance(ing, str):
                         ing_lines.append(f"- {ing.strip()}")
 
-            # directions field corresponds to instructions
-            instructions = data.get("directions") or data.get("instructions") or []
+            # 步骤字段（仅支持中文格式）
+            instructions = data.get("步骤") or data.get("directions") or data.get("instructions") or []
             instr_lines: List[str] = []
             if isinstance(instructions, list):
-                for idx, step in enumerate(instructions, 1):
+                for i, step in enumerate(instructions, 1):
                     if isinstance(step, str) and step.strip():
-                        instr_lines.append(f"{idx}. {step.strip()}")
+                        instr_lines.append(f"{i}. {step.strip()}")
             elif isinstance(instructions, str):
-                # Split into lines, remove empty lines
-                for idx, step in enumerate(instructions.splitlines(), 1):
-                    step = step.strip()
-                    if step:
-                        instr_lines.append(f"{idx}. {step}")
+                steps_list = [s.strip() for s in instructions.split("|") if s.strip()]
+                for i, step in enumerate(steps_list, 1):
+                    instr_lines.append(f"{i}. {step}")
 
-            # Compose semantic text (one chunk is enough)
+            # 将步骤合并为单一字符串，便于在元数据中保存与检索
+            instructions_text = "\n".join(instr_lines) if instr_lines else ""
+
+            # 组合语义文本
             text_parts = [
-                f"Title: {name}",
-                f"Description: {description}" if description else "",
-                f"Keywords: {', '.join(tags)}" if tags else "",
-                f"Glass: {glass}" if glass else "",
-                "Ingredients:" if ing_lines else "",
+                f"名称：{name}",
+                f"描述：{description}" if description else "",
+                f"类型：{recipe_type}" if recipe_type else "",
+                f"关键词：{', '.join(tags)}" if tags else "",
+                "配料：" if ing_lines else "",
                 *ing_lines,
-                "Directions:" if instr_lines else "",
+                "步骤：" if instr_lines else "",
                 *instr_lines,
-                f"Garnish: {garnish}" if garnish else "",
-                f"Alcoholic: {alcoholic}" if alcoholic is not None else "",
             ]
             semantic_text = "\n".join([t for t in text_parts if t])
 
-            # Generate embedding
+            # 生成嵌入向量
             embedding = self.get_embedding(semantic_text)
 
-            # Match same-name image (prioritize JSON's image field)
+            # 匹配同名图片
             basename = os.path.splitext(os.path.basename(file_path))[0]
-            json_image = data.get("image")
+            json_image = data.get("图片") or data.get("image")
             image_path = self._match_image_for_recipe(basename, str(json_image or ""))
 
-            # Write to vector database (one record per document)
-            # ChromaDB metadata field values must be native types (str/int/float/bool/None),
-            # so list-type fields are converted to strings.
+            # 写入向量数据库
             tags_str = ", ".join(tags) if isinstance(tags, list) else str(tags or "")
-            name_str = str(name or "")
-            glass_str = str(glass or "")
-            garnish_str = str(garnish or "")
-            # Convert alcoholic to string to avoid None type issues
-            if alcoholic is None:
-                alcoholic_str = ""
-            elif isinstance(alcoholic, bool):
-                alcoholic_str = "true" if alcoholic else "false"
-            else:
-                alcoholic_str = str(alcoholic)
             image_path_str = str(image_path or "")
+            source_str = str(data.get("来源") or data.get("source") or "")
 
             self.collection.add(
                 embeddings=[embedding],
@@ -399,22 +361,22 @@ class DataLoader:
                         "source": str(source_type or ""),
                         "file_path": str(file_path or ""),
                         "file_name": os.path.basename(file_path),
-                        "name": name_str,
+                        "name": str(name or ""),
+                        "type": str(recipe_type or ""),
                         "tags": tags_str,
-                        "glass": glass_str,
-                        "garnish": garnish_str,
-                        "alcoholic": alcoholic_str,
-                        "image_path": image_path_str,  # For frontend to display thumbnail or link
+                        "image_path": image_path_str,
+                        "recipe_source": source_str,
+                        "instructions": instructions_text,
                     }
                 ],
                 ids=[f"{file_path}"],
             )
 
-            print(f"   ✓ Recipe import complete: {name}")
+            print(f"   ✓ 甜品导入完成：{name}")
             return 1
 
         except Exception as e:
-            print(f"❌ JSON recipe processing failed {file_path}: {e}")
+            print(f"❌ JSON 甜品处理失败 {file_path}：{e}")
             return 0
 
     def load_directory(
