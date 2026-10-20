@@ -82,9 +82,9 @@ with st.sidebar:
         # 显示模型信息
         st.divider()
         st.subheader("🤖 模型配置")
-        gen_model = os.getenv("ALIYUN_CHAT_MODEL", "qwen-plus")
+        gen_model = os.getenv("ALIYUN_CHAT_MODEL", "qwen3.7-plus")
         embed_model = os.getenv("ALIYUN_EMBED_MODEL", "text-embedding-v4")
-        st.info(f"**服务提供商：** 阿里云通义千问")
+        st.info(f"**服务提供商：** 千问AI平台（Qwen AI Platform）")
         st.info(f"**生成模型：**\n`{gen_model}`")
         st.info(f"**嵌入模型：**\n`{embed_model}`")
 
@@ -267,5 +267,5 @@ if prompt := st.chat_input("向您的知识库提问..."):
 st.divider()
 # ====================== 页脚模型信息 ======================
 # 显示当前使用的模型和 ChromaDB 描述
-model_info = f"阿里云通义千问 ({os.getenv('ALIYUN_CHAT_MODEL', 'qwen-plus')})"
+model_info = f"千问AI平台 ({os.getenv('ALIYUN_CHAT_MODEL', 'qwen3.7-plus')})"
 st.caption(f"🤖 由 {model_info} 和 ChromaDB 驱动")

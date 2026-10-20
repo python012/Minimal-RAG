@@ -10,6 +10,9 @@ env/
 ENV/
 Pipfile.lock
 
+# Local secrets
+.env
+
 
 
 # Vector database (ChromaDB persistent data)

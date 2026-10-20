@@ -6,12 +6,12 @@ load_dotenv()
 
 client = OpenAI(
     api_key=os.getenv("ALIYUN_MODEL_API_KEY"),
-    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    base_url="https://maas.qianwenaiapi.com/compatible-mode/v1",
 )
 
 completion = client.chat.completions.create(
-    # Model list：https://help.aliyun.com/zh/model-studio/getting-started/models
-    model="qwen-flash",
+    # Model list：https://www.qianwenai.com/models
+    model="qwen3.8-flash",
     messages=[
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": "introduce yourself briefly."},

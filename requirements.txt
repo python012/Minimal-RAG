@@ -1,6 +1,9 @@
 # RAG Demo Dependencies
 # Core packages
-streamlit==1.29.0
+# 注意：streamlit 1.29 会强制 numpy<2，与新版 pyarrow（要求 numpy>=2）冲突，
+# 因此这里使用 1.40+ 并显式要求 numpy 2.x
+streamlit>=1.40,<2
+numpy>=2.0
 chromadb==1.3.5
 python-dotenv==1.0.0
 requests==2.31.0

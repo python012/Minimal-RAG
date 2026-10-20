@@ -1,6 +1,6 @@
 # Minimal RAG
 
-最小化的 RAG(Retrieval-augmented generation) 知识问答系统（基于阿里云通义千问）
+最小化的 RAG(Retrieval-augmented generation) 知识问答系统（基于千问AI平台 / Qwen）
 
 ## 📸 界面预览
 
@@ -17,15 +17,15 @@
 
 ## 🛠 技术栈
 
-- **LLM**: 阿里云通义千问（Qwen）
+- **LLM**: 千问AI平台（Qwen AI Platform）
 - **向量数据库**: ChromaDB
 - **Web 框架**: Streamlit
-- **向量化**: 阿里云 text-embedding-v4
+- **向量化**: text-embedding-v4
 
 ## 📋 前置要求
 
 - Python 3.8+
-- 阿里云 API Key（[获取地址](https://dashscope.console.aliyun.com/apiKey)）
+- 千问AI平台 API Key（[获取地址](https://platform.qianwenai.com/home/api-keys)）
 
 ## 🚀 快速开始
 
@@ -185,19 +185,19 @@ python query_chunk.py --like "冰淇淋" --max 10
 
 | 变量名 | 说明 | 默认值 |
 |--------|------|--------|
-| `ALIYUN_MODEL_API_KEY` | 阿里云 API 密钥 | 必填 |
-| `ALIYUN_BASE_URL` | API 端点 | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
-| `ALIYUN_CHAT_MODEL` | 对话模型 | `qwen-plus` |
+| `ALIYUN_MODEL_API_KEY` | 千问AI平台 API 密钥（`sk-ws-` 开头） | 必填 |
+| `ALIYUN_BASE_URL` | API 端点 | `https://maas.qianwenaiapi.com/compatible-mode/v1` |
+| `ALIYUN_CHAT_MODEL` | 对话模型 | `qwen3.7-plus` |
 | `ALIYUN_EMBED_MODEL` | 嵌入模型 | `text-embedding-v4` |
 | `ALIYUN_EMBED_DIM` | 向量维度 | `1024` |
 | `CHROMA_DB_PATH` | 数据库路径 | `./vector_db` |
 
 ### 模型选择
 
-- **qwen-turbo**: 快速响应，适合简单对话
-- **qwen-plus**: 平衡性能和成本（推荐）
-- **qwen-max**: 最强性能，适合复杂任务
-- **qwen-flash**: 极速响应，适合高并发场景
+- **qwen3.7-plus**: 能力与成本均衡，1M 上下文（推荐）
+- **qwen3.8-flash**: 接近旗舰水平，价格更低，适合高并发
+- **qwen3.8-max**: 最强推理与编程能力，价格最高
+- **text-embedding-v4**: 支持 64~2048 维（默认 1024），继续使用可直接复用已有向量库
 
 ## 🗂 项目结构
 
@@ -279,9 +279,21 @@ A: 降低相关度阈值（min_relevance）或检查文档是否正确导入
 ### Q: 导入文档失败
 A: 确保文件使用 UTF-8 编码，检查文件路径是否正确
 
+### Q: 启动时报 `ImportError: pyarrow requires NumPy 2.0 or newer, found 1.26.4`
+A: 因为旧版 streamlit（1.29）强制 `numpy<2`，而新版 pyarrow 要求 `numpy>=2`。在已激活的虚拟环境中升级即可：
+
+```bash
+pip install -U "streamlit>=1.40" "numpy>=2.0" "opentelemetry-proto>=1.45"
+```
+
+（`opentelemetry-proto` 是 chromadb 的间接依赖，旧版本要求 `protobuf<5`，会与新版 streamlit 冲突。）
+
+### Q: 启动时报 `ModuleNotFoundError` 或 `ImportError`
+A: 先确认已激活虚拟环境（命令行前有 `(venv)`），然后执行 `pip install -r requirements.txt`
+
 ## 📚 相关资源
 
-- [阿里云通义千问文档](https://help.aliyun.com/zh/model-studio/getting-started/models)
+- [千问AI平台文档](https://platform.qianwenai.com/docs/developer-guides/getting-started/introduction)
 - [ChromaDB 文档](https://docs.trychroma.com/)
 - [Streamlit 文档](https://docs.streamlit.io/)
 

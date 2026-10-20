@@ -18,9 +18,9 @@ from openai import OpenAI
 # 首先加载 .env 以确保环境变量可用
 load_dotenv()
 
-# 阿里云 API 配置
+# 千问AI平台 API 配置
 ALIYUN_MODEL_API_KEY = os.getenv("ALIYUN_MODEL_API_KEY", "")
-ALIYUN_BASE_URL = os.getenv("ALIYUN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+ALIYUN_BASE_URL = os.getenv("ALIYUN_BASE_URL", "https://maas.qianwenaiapi.com/compatible-mode/v1")
 ALIYUN_EMBED_MODEL = os.getenv("ALIYUN_EMBED_MODEL", "text-embedding-v4")
 ALIYUN_EMBED_DIM = int(os.getenv("ALIYUN_EMBED_DIM", "1024"))
 # API 超时时间（秒），默认 3 分钟
@@ -63,7 +63,7 @@ class DataLoader:
         )
 
         print("✓ 数据加载器已初始化")
-        print(f"  - 嵌入模型：{ALIYUN_EMBED_MODEL}（阿里云通义千问）")
+        print(f"  - 嵌入模型：{ALIYUN_EMBED_MODEL}（千问AI平台）")
         print(f"  - 向量维度：{ALIYUN_EMBED_DIM}")
         print(f"  - API 端点：{ALIYUN_BASE_URL}")
         print(f"  - 数据库路径：{db_path}")
@@ -443,7 +443,9 @@ class DataLoader:
         操作流程：
         1. 删除现有的 "knowledge_base" 集合
         2. 重新创建一个空的 "knowledge_base" 集合
-        3. 插入一条占位记录以确保集合正确初始化
+
+        清空操作完全在本地完成，不调用嵌入 API，
+        因此即使 API 额度耗尽或未配置密钥也能正常清空。
 
         使用场景：
         - 重新导入前清空旧数据
@@ -456,37 +458,18 @@ class DataLoader:
         try:
             print("🗑️  正在清空数据库...")
 
-            # 删除集合
-            self.chroma_client.delete_collection("knowledge_base")
+            # 删除集合（数据库为空或集合不存在时忽略）
+            try:
+                self.chroma_client.delete_collection("knowledge_base")
+            except Exception:
+                pass
 
-            # 重新创建集合
-            self.collection = self.chroma_client.create_collection(
+            # 重新创建空集合
+            self.collection = self.chroma_client.get_or_create_collection(
                 name="knowledge_base", metadata={"description": "RAG 知识库"}
             )
 
-            # 插入一条占位记录以确保集合正确初始化
-            dummy_text = "这是一条用于初始化集合的占位记录。"
-            dummy_embedding = self.get_embedding(dummy_text)
-            self.collection.add(
-                embeddings=[dummy_embedding],
-                documents=[dummy_text],
-                metadatas=[
-                    {
-                        "source": "system",
-                        "file_path": "__dummy__",
-                        "file_name": "__dummy__",
-                        "name": "占位符",
-                        "tags": "system",
-                        "glass": "",
-                        "garnish": "",
-                        "alcoholic": "",
-                        "image_path": "",
-                    }
-                ],
-                ids=["__dummy_init__"],
-            )
-
-            print("✓ 数据库已清空（已插入占位记录）")
+            print("✓ 数据库已清空")
 
         except Exception as e:
             print(f"❌ 清空数据库失败：{e}")
@@ -560,7 +543,7 @@ def main():
 
     # 初始化数据加载器
     print("=" * 60)
-    print("📦 阿里云 Qwen RAG 数据加载器")
+    print("📦 千问AI平台 RAG 数据加载器")
     print("=" * 60)
 
     loader = DataLoader(db_path=db_path)

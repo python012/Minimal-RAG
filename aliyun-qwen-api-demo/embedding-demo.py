@@ -6,7 +6,7 @@ load_dotenv()
 
 client = OpenAI(
     api_key=os.getenv("ALIYUN_MODEL_API_KEY"),
-    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
+    base_url="https://maas.qianwenaiapi.com/compatible-mode/v1"
 )
 
 completion = client.embeddings.create(

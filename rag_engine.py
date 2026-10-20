@@ -24,10 +24,10 @@ from openai import OpenAI
 # 首先加载 .env 以确保环境变量在模块初始化时可用
 load_dotenv()
 
-# 阿里云 API 配置
+# 千问AI平台 API 配置
 ALIYUN_MODEL_API_KEY = os.getenv("ALIYUN_MODEL_API_KEY", "")
-ALIYUN_BASE_URL = os.getenv("ALIYUN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
-ALIYUN_CHAT_MODEL = os.getenv("ALIYUN_CHAT_MODEL", "qwen-plus")
+ALIYUN_BASE_URL = os.getenv("ALIYUN_BASE_URL", "https://maas.qianwenaiapi.com/compatible-mode/v1")
+ALIYUN_CHAT_MODEL = os.getenv("ALIYUN_CHAT_MODEL", "qwen3.7-plus")
 ALIYUN_EMBED_MODEL = os.getenv("ALIYUN_EMBED_MODEL", "text-embedding-v4")
 ALIYUN_EMBED_DIM = int(os.getenv("ALIYUN_EMBED_DIM", "1024"))
 # API 超时时间（秒），默认 3 分钟
@@ -79,8 +79,8 @@ class RAGEngine:
 
         # 打印初始化信息
         print("✓ RAG 引擎已初始化")
-        print(f"  - 生成模型：{ALIYUN_CHAT_MODEL}（阿里云通义千问）")
-        print(f"  - 嵌入模型：{ALIYUN_EMBED_MODEL}（阿里云通义千问）")
+        print(f"  - 生成模型：{ALIYUN_CHAT_MODEL}（千问AI平台）")
+        print(f"  - 嵌入模型：{ALIYUN_EMBED_MODEL}（千问AI平台）")
         print(f"  - 数据库路径：{db_path}")
 
     def get_embedding(self, text: str) -> List[float]:
