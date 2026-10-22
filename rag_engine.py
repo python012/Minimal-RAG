@@ -146,6 +146,7 @@ class RAGEngine:
 
         返回：
             优化后的结果（距离分数已调整，排名已更新）
+            注意：ids 会和其他三个字段一起被重排，保持同下标对齐。
         """
         if not results or not results.get("metadatas") or not results["metadatas"][0]:
             return results
@@ -157,12 +158,20 @@ class RAGEngine:
         documents = results["documents"][0]
         metadatas = results["metadatas"][0]
         distances = results["distances"][0]
+        # 重要：ChromaDB 的 "ids" 是「必填字段」（不受 include 白名单控制，永远会返回），
+        # 因此它必须和 documents / metadatas / distances 一起搬运。
+        # 否则重排之后，ids 会停留在「重排前」的旧顺序上，与其他三个字段错位。
+        ids = results["ids"][0] if results.get("ids") else []
+        if len(ids) != len(documents):
+            # 防御性处理：万一长度不一致，补齐到相同长度，避免 zip 静默丢数据
+            ids = list(ids) + [None] * (len(documents) - len(ids))
 
+        # 元组结构：(文档内容, 元数据, 调整后距离, boost 分数, 记录 id)
         boosted_results = []
-        for doc, meta, dist in zip(documents, metadatas, distances):
+        for doc, meta, dist, rid in zip(documents, metadatas, distances, ids):
             name = meta.get("name", "")
             if not name:
-                boosted_results.append((doc, meta, dist, 0))
+                boosted_results.append((doc, meta, dist, 0, rid))
                 continue
 
             normalized_name = self._normalize_text(name)
@@ -192,15 +201,17 @@ class RAGEngine:
             else:
                 adjusted_dist = dist
 
-            boosted_results.append((doc, meta, adjusted_dist, boost_score))
+            boosted_results.append((doc, meta, adjusted_dist, boost_score, rid))
 
-        # 按调整后的距离重新排序
+        # 按调整后的距离重新排序（排序键仍是第 3 项「距离」，新增 id 不影响排序逻辑）
         boosted_results.sort(key=lambda x: x[2])
 
-        # 重构结果格式
+        # 重构结果格式：四个字段全部来自同一个 boosted_results，
+        # 这样 ids 才能和 documents / metadatas / distances 保持同下标对齐
         results["documents"] = [[item[0] for item in boosted_results]]
         results["metadatas"] = [[item[1] for item in boosted_results]]
         results["distances"] = [[item[2] for item in boosted_results]]
+        results["ids"] = [[item[4] for item in boosted_results]]
 
         return results
 
@@ -236,10 +247,12 @@ class RAGEngine:
         返回：
             搜索结果字典，包含：
             {
-                'documents': [[doc1, doc2, ...]],  # 检索到的文档内容
-                'metadatas': [[meta1, meta2, ...]],  # 文档元数据（文件名等）
-                'distances': [[dist1, dist2, ...]]   # 相似度距离（越小 = 越相关，已应用加权）
+                'ids':        [[id1, id2, ...]],      # 记录 ID（ChromaDB 必填字段，始终返回）
+                'documents':  [[doc1, doc2, ...]],    # 检索到的文档内容
+                'metadatas':  [[meta1, meta2, ...]],  # 文档元数据（文件名等）
+                'distances':  [[dist1, dist2, ...]]   # 相似度距离（越小 = 越相关，已应用加权）
             }
+            注意：以上四个字段的内层列表同下标一一对应（指向同一条记录）。
         """
         try:
             # 1. 将问题转换为向量
@@ -273,10 +286,14 @@ class RAGEngine:
             results = self._boost_exact_matches(query, results)
 
             # 5. 裁剪到最终所需的 n_results
+            # 注意：ids 是 ChromaDB 的必填字段，同样需要一起裁剪，
+            # 否则会出现 ids 的长度远大于其他三个字段、无法一一对应的问题
             if results and results.get("documents"):
                 results["documents"] = [results["documents"][0][:n_results]]
                 results["metadatas"] = [results["metadatas"][0][:n_results]]
                 results["distances"] = [results["distances"][0][:n_results]]
+                if results.get("ids"):
+                    results["ids"] = [results["ids"][0][:n_results]]
 
             return results
 
