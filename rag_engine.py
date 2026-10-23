@@ -20,9 +20,12 @@ import chromadb
 from chromadb.config import Settings
 from dotenv import load_dotenv
 from openai import OpenAI
+import logging
 
 # 首先加载 .env 以确保环境变量在模块初始化时可用
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 # 千问AI平台 API 配置
 ALIYUN_MODEL_API_KEY = os.getenv("ALIYUN_MODEL_API_KEY", "")
@@ -77,11 +80,9 @@ class RAGEngine:
             name="knowledge_base", metadata={"description": "RAG 知识库"}
         )
 
-        # 打印初始化信息
-        print("✓ RAG 引擎已初始化")
-        print(f"  - 生成模型：{ALIYUN_CHAT_MODEL}（千问AI平台）")
-        print(f"  - 嵌入模型：{ALIYUN_EMBED_MODEL}（千问AI平台）")
-        print(f"  - 数据库路径：{db_path}")
+        logger.info(f"RAG 引擎已初始化，数据库路径：{db_path}")
+        logger.info(f"生成模型：{ALIYUN_CHAT_MODEL}（千问AI平台）")
+        logger.info(f"嵌入模型：{ALIYUN_EMBED_MODEL}（千问AI平台）")
 
     def get_embedding(self, text: str) -> List[float]:
         """
@@ -105,8 +106,8 @@ class RAGEngine:
                 model=ALIYUN_EMBED_MODEL, input=text, dimensions=ALIYUN_EMBED_DIM, encoding_format="float"
             )
             return response.data[0].embedding
-        except Exception as e:
-            print(f"❌ 阿里云嵌入 API 失败：{e}")
+        except Exception as _:
+            logger.exception("阿里云嵌入 API 失败")
             raise
 
     def _normalize_text(self, text: str) -> str:
@@ -297,8 +298,8 @@ class RAGEngine:
 
             return results
 
-        except Exception as e:
-            print(f"❌ 搜索失败：{e}")
+        except Exception as _:
+            logger.exception("搜索失败")
             raise
 
     def generate_answer(
@@ -373,8 +374,8 @@ class RAGEngine:
                             yield chunk.choices[0].delta.content
 
                 return qwen_stream_generator()
-        except Exception as e:
-            print(f"❌ 阿里云对话 API 失败：{e}")
+        except Exception as _:
+            logger.exception("阿里云对话 API 失败")
             raise
 
     def query(
@@ -452,13 +453,12 @@ class RAGEngine:
                 try:
                     max_relevance = max(1 - d for d in distances)
                     # 调试输出：查看实际距离和相关度
-                    print(f"\n🔍 检索分析：")
-                    print(f"   问题：{question}")
-                    print(f"   前 3 个距离：{distances[:3]}")
-                    print(f"   前 3 个相关度分数（1-距离）：{[round(1-d, 6) for d in distances[:3]]}")
-                    print(f"   最大相关度分数：{max_relevance:.6f}")
-                    print(f"   相关度阈值：{min_relevance:.6f}")
-                    print(f"   满足阈值：{max_relevance >= max(0.0, min_relevance)}")
+                    logger.debug("检索分析：问题=%s", question)
+                    logger.debug("前 3 个距离：%s", [round(d, 6) for d in distances[:3]])
+                    logger.debug("前 3 个相关度分数（1-距离）：%s", [round(1 - d, 6) for d in distances[:3]])
+                    logger.debug("最大相关度分数：%.6f", max_relevance)
+                    logger.debug("相关度阈值：%s", max(0.0, min_relevance))
+                    logger.debug("满足阈值：%s", max_relevance >= max(0.0, min_relevance))
                 except Exception:
                     max_relevance = 0.0
 
@@ -520,7 +520,7 @@ class RAGEngine:
             return {"answer": answer, "sources": sources, "raw_results": search_results}
 
         except Exception as e:
-            print(f"❌ 查询失败：{e}")
+            logger.exception("RAG 查询失败")
             return {"answer": f"错误：{str(e)}", "sources": [], "raw_results": None}
 
     def get_stats(self) -> Dict:
@@ -537,6 +537,6 @@ class RAGEngine:
         try:
             count = self.collection.count()
             return {"total_documents": count, "collection_name": self.collection.name}
-        except Exception as e:
-            print(f"❌ 获取统计信息失败：{e}")
+        except Exception as _:
+            logger.exception("获取统计信息失败")
             return {"total_documents": 0, "collection_name": "unknown"}
