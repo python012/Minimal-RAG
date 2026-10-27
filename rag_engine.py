@@ -13,7 +13,7 @@ RAG 引擎 - 检索增强生成的核心逻辑（阿里云 Qwen 版本）
 - 答案可验证并可引用来源，更加可靠
 """
 
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, TypedDict, cast
 import os
 import re
 import chromadb
@@ -26,6 +26,71 @@ import logging
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+
+class RecipeMeta(TypedDict, total=False):
+    """一条检索结果里的 metadata 结构（对应 data_loader.py 建库时写入的 9 个字段）。
+
+    total=False：这些字段在建库时**总是**会被写入，但从类型上不强制 ——
+    下游读 `meta.get("name", "")` 而不是 `meta["name"]`，
+    因为历史库里可能有不完整的旧记录。写成必填会让类型检查和运行时不符。
+    """
+
+    source: str  # 来源类型："file" / "git"
+    file_path: str  # 语料相对路径
+    file_name: str  # 文件名
+    name: str  # 甜品名，例如 "煤球冰淇淋"
+    type: str  # 类型，例如 "甜品"
+    tags: str  # 逗号分隔的标签
+    image_path: str  # 配图路径
+    recipe_source: str  # 原始出处 URL
+    instructions: str  # 制作步骤全文
+
+
+class SearchResults(TypedDict):
+    """`RAGEngine.search()` 的返回结构。
+
+    ## 为什么是双层 list
+
+    ChromaDB 的 `query()` 是**批量**接口：外层 list = query 批次（本引擎恒传 1 条
+    embedding，所以外层长度恒为 1），内层 list = 这一批的结果。
+
+    所以 `search(...)["metadatas"]` 的真实形状是 `[[{...}, {...}]]`，**不是** `[{...}]`。
+    少一层下标就会取到错误的对象 —— 这正是 Day 1 那个 ids 错位 bug 的形态：
+    不报错、CI 全绿、指标是假的。
+
+    ## 四个字段同下标对齐
+
+    `ids[i]` / `documents[i]` / `metadatas[i]` / `distances[i]` 指向**同一条记录**。
+    这个契约由 `_boost_exact_matches()` 和裁剪逻辑共同保证，任何改动都必须四个一起搬。
+
+    ## distances 的语义
+
+    **L2 平方欧氏距离**（collection 建库时没设 `hnsw:space`，走 ChromaDB 默认 `l2`）。
+    没有 0–1 上界，可能 > 1；被 boost 加权后会更小。
+    **不要**拿它当「相关度分数」，也不要用 `1 - dist` 当阈值（可能为负）。
+
+    ## 为什么四个字段都是「必需」（不加 total=False）
+
+    `search()` 在任何成功路径上**一定**返回这四个键：`collection.query()` 的
+    ids 是 ChromaDB 的必填字段，另三个由 `include=[...]` 显式请求；
+    即使召回 0 条，它们也是**空的内层 list**（`[[]]`）而不是缺失的键。
+
+    反过来，如果加 `total=False`，Pyright / Pylance 会把每一处 `results["ids"]`
+    都标成 `reportTypedDictNotRequiredAccess`（"不是必需键，访问可能抛异常"）——
+    那 15 处红标全是噪音，会淹没真正的问题。**类型应当描述正常路径的契约**，
+    空结果用「空 list」表达，不用「缺键」表达。
+
+    至于 ChromaDB `QueryResult` 里 `embeddings` / `uris` / `data` 那几个可能为
+    `None` 的字段：本引擎没有使用它们，所以**根本不写进这个声明**——
+    少声明比声明成 `Optional` 更安全，因为没人能读到不存在的东西。
+    """
+
+    ids: List[List[str]]  # 记录 ID，本语料下 = file_path
+    documents: List[List[str]]  # chunk 正文
+    metadatas: List[List[RecipeMeta]]  # 每条记录的 metadata
+    distances: List[List[float]]  # L2 平方欧氏距离（越小越相关，boost 后会更小）
+
 
 # 千问AI平台 API 配置
 ALIYUN_MODEL_API_KEY = os.getenv("ALIYUN_MODEL_API_KEY", "")
@@ -132,7 +197,7 @@ class RAGEngine:
 
         return text.strip()
 
-    def _boost_exact_matches(self, query: str, results: Any) -> Any:
+    def _boost_exact_matches(self, query: str, results: SearchResults) -> SearchResults:
         """
         混合检索优化：通过精确匹配菜谱名称来提升结果排名。
 
@@ -164,8 +229,15 @@ class RAGEngine:
         # 否则重排之后，ids 会停留在「重排前」的旧顺序上，与其他三个字段错位。
         ids = results["ids"][0] if results.get("ids") else []
         if len(ids) != len(documents):
-            # 防御性处理：万一长度不一致，补齐到相同长度，避免 zip 静默丢数据
-            ids = list(ids) + [None] * (len(documents) - len(ids))
+            # 防御性处理：万一长度不一致，补齐到相同长度，避免 zip 静默丢数据。
+            #
+            # 这里用 `# type: ignore` 而不是把 SearchResults.ids 放宽成 Optional[str]：
+            # 补齐出来的 None 只在「ChromaDB 违反了它自己的必填字段承诺」时才会出现，
+            # 属于不该发生的兜底分支。如果为了这一行把 ids 声明成 Optional，
+            # 下游（适配层校验器、评测代码）每处读 ids 都要处理 None ——
+            # 而那 99.99% 的真实路径上 ids 一定是 str。
+            # 所以：**让类型承担「正常路径的契约」，让这一行的 ignore 承担「兜底分支的例外」。**
+            ids = list(ids) + [None] * (len(documents) - len(ids))  # type: ignore[list-item]
 
         # 元组结构：(文档内容, 元数据, 调整后距离, boost 分数, 记录 id)
         boosted_results = []
@@ -216,7 +288,7 @@ class RAGEngine:
 
         return results
 
-    def search(self, query: str, n_results: int = 5, filter_source: Optional[str] = None) -> Any:
+    def search(self, query: str, n_results: int = 5, filter_source: Optional[str] = None) -> SearchResults:
         """
         在知识库中搜索与问题最相关的文档（混合检索：向量相似度 + 精确匹配加权）
 
@@ -267,12 +339,17 @@ class RAGEngine:
             # 3. 在向量数据库中搜索（检索更多候选以便精确匹配加权后重新排序）
             # 对于小数据集，搜索更多候选以确保精确匹配被召回
             search_n = min(max(n_results * 5, 30), 100)  # 搜索更多候选，最多 100
-            results = self.collection.query(
+            raw = self.collection.query(
                 query_embeddings=[query_embedding],  # 问题向量
                 n_results=search_n,  # 返回的候选数量
                 where=where_filter,  # type: ignore  # 过滤条件
                 include=["documents", "metadatas", "distances"],  # 返回的内容
             )
+            # 唯一一处类型边界：ChromaDB 的 QueryResult 把 embeddings / uris / data
+            # 声明成「必填但可为 None」，与本引擎实际使用（且必然存在）的四个字段不符。
+            # 在这里一次性 cast 成 SearchResults，本函数之后的代码就都在精确类型下检查，
+            # 不需要再到处 Any。cast 是**纯静态**的，运行时零开销、不改行为。
+            results = cast(SearchResults, raw)
 
             # 4. 应用精确匹配加权优化
             # 背景问题：纯向量匹配有时会失效
