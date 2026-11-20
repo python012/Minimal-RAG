@@ -28,6 +28,24 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 
+def _usage_to_dict(usage) -> Dict:
+    """把 OpenAI 兼容接口的 ``CompletionUsage`` 转成可 JSON 序列化的 dict。
+
+    为什么单独抽一个函数：三个调用点都要转，且字段口径必须一致 ——
+    一处写 ``prompt_tokens``、另一处写 ``prompt``，下游就得写两套解析。
+
+    ``usage`` 为 None 时返回空 dict，**不补 0**：有的兼容网关不返回 usage，
+    补 0 会让下游把「没上报」当成「真的没花 token」，和 1.1 那类静默错误同源。
+    """
+    if usage is None:
+        return {}
+    return {
+        "prompt_tokens": getattr(usage, "prompt_tokens", None),
+        "completion_tokens": getattr(usage, "completion_tokens", None),
+        "total_tokens": getattr(usage, "total_tokens", None),
+    }
+
+
 class RecipeMeta(TypedDict, total=False):
     """一条检索结果里的 metadata 结构（对应 data_loader.py 建库时写入的 9 个字段）。
 
@@ -385,6 +403,7 @@ class RAGEngine:
         context_docs: List[str],
         chat_history: Optional[List[Dict]] = None,
         stream: bool = False,
+        usage_sink: Optional[List[Dict]] = None,
     ):
         """
         使用阿里云 Qwen API 基于检索到的文档生成答案。
@@ -394,9 +413,18 @@ class RAGEngine:
             context_docs: 检索到的上下文文档列表
             chat_history: 对话历史（可选，暂未使用）
             stream: 是否使用流式输出
+            usage_sink: 可选的列表。传入时把本次调用的 token 用量 append 进去，
+                形如 ``{"prompt_tokens": 1284, "completion_tokens": 312,
+                "total_tokens": 1596}``。用「往外塞一个列表」而不是改返回值，
+                是为了让 app.py 那条调用链照旧拿字符串，只有需要成本的地方才传。
 
         返回：
-            生成的答案字符串，或流式生成器
+            生成的答案字符串，或流式生成器。
+
+        已知局限：
+            流式模式**拿不到 usage** —— 该端点要额外传
+            ``stream_options={"include_usage": True}`` 才会在最后一个 chunk 带用量，
+            这里没开。评测链路（``query()``）走的是非流式，不受影响。
         """
         if not ALIYUN_MODEL_API_KEY:
             raise ValueError("❌ 未配置阿里云 API 密钥，请在 .env 文件中设置 ALIYUN_MODEL_API_KEY")
@@ -433,6 +461,8 @@ class RAGEngine:
                         {"role": "user", "content": user_content},
                     ],
                 )
+                if usage_sink is not None:
+                    usage_sink.append(_usage_to_dict(completion.usage))
                 return completion.choices[0].message.content
             else:
                 # 流式模式
@@ -511,8 +541,23 @@ class RAGEngine:
                     },
                     ...
                 ],
-                'raw_results': {...}            # 原始搜索结果
+                'raw_results': {...},           # 原始搜索结果
+                'meta': {                       # 本次调用的运行事实（W3 新增）
+                    'model': "qwen3.8-flash",   # 进程内**实际**加载的生成模型
+                    'usage': {                  # 该端点回报的 token 用量
+                        'prompt_tokens': 1284,  # 情况 B 含检索到的语料正文
+                        'completion_tokens': 312,
+                        'total_tokens': 1596
+                    }
+                }
             }
+
+        关于 ``meta``：
+            它是**加在原有返回结构上的新键**，三个必填键（answer / sources /
+            raw_results）语义不变。``meta["model"]`` 取自模块常量，所以它是
+            「这个进程真的用了谁」，而不是「配置里写了谁」——两者在 .env 没读到
+            时会分叉（那时常量落回默认值 qwen3.7-plus），这正是要记录它的原因。
+            ``usage`` 在拿不到时是 ``{}``，不补 0。
         """
         try:
             # 步骤 1：搜索相关文档
@@ -544,11 +589,13 @@ class RAGEngine:
             if is_irrelevant:
                 # 情况 A：未找到相关文档
                 # 让模型使用自己的原生知识回答
+                usage: Dict = {}
                 if not ALIYUN_MODEL_API_KEY:
                     return {
                         "answer": "❌ 未配置阿里云 API 密钥，无法回答问题",
                         "sources": [],
                         "raw_results": search_results,
+                        "meta": {"model": ALIYUN_CHAT_MODEL, "usage": usage},
                     }
 
                 try:
@@ -566,6 +613,7 @@ class RAGEngine:
                             },
                         ],
                     )
+                    usage = _usage_to_dict(completion.usage)
                     answer = completion.choices[0].message.content
                 except Exception as e:
                     answer = f"错误：{str(e)}"
@@ -575,11 +623,20 @@ class RAGEngine:
                     "answer": answer,
                     "sources": [],
                     "raw_results": search_results,
+                    "meta": {"model": ALIYUN_CHAT_MODEL, "usage": usage},
                 }
 
             # 情况 B：找到相关文档
             # 步骤 3：基于检索到的文档生成答案
-            answer = self.generate_answer(query=question, context_docs=documents, chat_history=chat_history)
+            # usage_box 只是运载用量的一个空列表：generate_answer 的返回值必须
+            # 保持 str（app.py 直接把它写进页面），用量走旁路传出来。
+            usage_box: List[Dict] = []
+            answer = self.generate_answer(
+                query=question,
+                context_docs=documents,
+                chat_history=chat_history,
+                usage_sink=usage_box,
+            )
 
             # 步骤 4：组织来源信息
             # 打包文档内容、元数据和相关度分数
@@ -594,11 +651,24 @@ class RAGEngine:
             ]
 
             # 步骤 5：返回完整结果
-            return {"answer": answer, "sources": sources, "raw_results": search_results}
+            return {
+                "answer": answer,
+                "sources": sources,
+                "raw_results": search_results,
+                "meta": {
+                    "model": ALIYUN_CHAT_MODEL,
+                    "usage": usage_box[0] if usage_box else {},
+                },
+            }
 
         except Exception as e:
             logger.exception("RAG 查询失败")
-            return {"answer": f"错误：{str(e)}", "sources": [], "raw_results": None}
+            return {
+                "answer": f"错误：{str(e)}",
+                "sources": [],
+                "raw_results": None,
+                "meta": {"model": ALIYUN_CHAT_MODEL, "usage": {}},
+            }
 
     def get_stats(self) -> Dict:
         """
